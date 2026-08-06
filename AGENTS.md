@@ -39,4 +39,6 @@ Kitchen mode is the selected visual direction. Display `Menu → Course → Food
 - The Create Task modal always shows Epic (Menu) → Story (Course) → Task (Food Piece) + Bug (Kitchen Issue).
 - Kitchen mode includes Home and Character pages. Character cards use the supplied portraits and identities: Arparat = Saint - Chan (Data Provider), Chonlasit = Bon - Kun (AI Engineer), Sorawee = Ing - Kun (Web Developer), and Tichaiyut = Topu - Kun (Data Scientist).
 
+- Keep the shared site session to 2 hours. After 5 consecutive wrong password attempts from the same client, block further attempts for 2 hours; store this lock server-side so refreshing or reopening the browser does not reset it. A successful login resets the failure count.
+
 Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts/prepare-sites-build.mjs`, and `tests/sites-worker.test.mjs` intact so the same local prototype can be handed to Sites. Before a Sites handoff, run `npm run build` and `npm run test:sites`; the build must leave `dist/client/index.html`, `dist/server/index.js`, and `dist/.openai/hosting.json`.

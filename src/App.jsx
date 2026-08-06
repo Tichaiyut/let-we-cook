@@ -1000,6 +1000,16 @@ function LoginScreen({ onAuthenticated }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [lockedUntil, setLockedUntil] = useState(0);
+  const [, setClockTick] = useState(0);
+  const lockedSeconds = Math.max(0, Math.ceil((lockedUntil - Date.now()) / 1000));
+  const isLocked = lockedSeconds > 0;
+
+  useEffect(() => {
+    if (!isLocked) return undefined;
+    const timer = window.setInterval(() => setClockTick((value) => value + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [isLocked]);
 
   return (
     <main className="login-screen">
@@ -1019,7 +1029,10 @@ function LoginScreen({ onAuthenticated }) {
               body: JSON.stringify({ password }),
             });
             const result = await response.json();
-            if (!response.ok || !result.authenticated) throw new Error(result.error || "รหัสผ่านไม่ถูกต้อง");
+            if (!response.ok || !result.authenticated) {
+              if (result.locked && result.retryAfter) setLockedUntil(Date.now() + Number(result.retryAfter) * 1000);
+              throw new Error(result.error || "รหัสผ่านไม่ถูกต้อง");
+            }
             onAuthenticated();
           } catch (loginError) {
             setError(loginError.message || "เข้าสู่ระบบไม่สำเร็จ");
@@ -1027,9 +1040,10 @@ function LoginScreen({ onAuthenticated }) {
             setSubmitting(false);
           }
         }}>
-          <label><span>Team password</span><div><LockKey size={18} /><input autoFocus required type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter password" /></div></label>
+          <label><span>Team password</span><div><LockKey size={18} /><input autoFocus required disabled={isLocked} type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter password" /></div></label>
           {error && <p className="login-error">{error}</p>}
-          <button type="submit" disabled={submitting}>{submitting ? "Opening kitchen…" : "Enter workspace"}</button>
+          {isLocked && <p className="login-lock-time">ลองใหม่ได้ใน {Math.floor(lockedSeconds / 3600)}:{String(Math.floor((lockedSeconds % 3600) / 60)).padStart(2, "0")}:{String(lockedSeconds % 60).padStart(2, "0")}</p>}
+          <button type="submit" disabled={submitting || isLocked}>{isLocked ? "Temporarily locked" : submitting ? "Opening kitchen…" : "Enter workspace"}</button>
         </form>
         <em>สำหรับสมาชิก TechFeed Team เท่านั้น</em>
       </section>

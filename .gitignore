@@ -1,5 +1,7 @@
 node_modules/
 .npm-cache/
 dist/
+.env*
+.dev.vars*
 implementation-*.png
 design-comparison-*.png

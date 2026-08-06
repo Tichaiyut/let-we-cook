@@ -448,6 +448,7 @@ td:nth-child(3) { display: flex; align-items: center; gap: 7px; }
 .add-person-button { min-height: 38px; align-self: end; border: 1px dashed #9aa7b5; border-radius: 9px; display: flex; align-items: center; justify-content: center; gap: 5px; color: #4c5d70; background: #f7f9fb; font-weight: 750; cursor: pointer; }
 .color-input { min-height: 38px; padding: 4px !important; cursor: pointer; }
 .form-error, .login-error { margin: 8px 0 0; color: #b42318; font-size: 11px; font-weight: 700; }
+.login-lock-time { margin: 8px 0 0; color: #8a5b1f; font-size: 11px; font-weight: 800; }
 .logout-button { height: 32px; padding: 0 10px; border: 1px solid #d7dde4; border-radius: 8px; color: #5a6878; background: #fff; font-size: 10px; font-weight: 750; cursor: pointer; }
 .live-badge.error i { background: #d14343; }
 .live-badge.preview i { background: #df8f2b; }
