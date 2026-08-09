@@ -541,7 +541,7 @@ function CharacterRoster({ tasks }) {
           const projects = [...new Set(memberTasks.map((task) => task.project))].slice(0, 4);
           return (
             <article className="character-card" key={character.id}>
-              <div className="character-card__portrait"><img src={AVATAR_IMAGES[character.id]} alt={character.name} /><span>Lv. {Math.max(1, Math.ceil(memberTasks.length / 3))}</span></div>
+              <div className="character-card__portrait"><img src={AVATAR_IMAGES[character.id]} alt={character.name} /></div>
               <div className="character-card__identity"><small>{character.role}</small><h2>{character.title}</h2><b>{character.name}</b><p>{character.specialty}</p></div>
               <div className="character-stats"><span><b>{memberTasks.length}</b> Food Pieces</span><span><b>{completeness}%</b> Completeness</span></div>
               <div className="character-projects"><small>Current menus</small><div>{projects.length ? projects.map((project) => <span key={project}>{project}</span>) : <em>No active menu</em>}</div></div>
