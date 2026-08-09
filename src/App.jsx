@@ -20,7 +20,8 @@ import {
   X,
 } from "@phosphor-icons/react";
 
-const DATA_URL = "/api/data";
+const apiUrl = (name) => window.__LWC_PHP_API?.[name] || `/api/${name}`;
+const DATA_URL = apiUrl("data");
 const IS_LOCAL_PREVIEW = import.meta.env.DEV;
 const ACTIVE_TEAM = ["chonlasit", "sorawee", "tichaiyut", "arparat"];
 const ACTIVE_TEAM_LABELS = {
@@ -29,11 +30,12 @@ const ACTIVE_TEAM_LABELS = {
   tichaiyut: "Tichaiyut",
   arparat: "Arparat",
 };
+const ASSET_BASE = window.__LWC_ASSET_BASE || "";
 const AVATAR_IMAGES = {
-  arparat: "/avatars/arparat.png",
-  tichaiyut: "/avatars/tichaiyut.png",
-  chonlasit: "/avatars/chonlasit.png",
-  sorawee: "/avatars/sorawee.png",
+  arparat: `${ASSET_BASE}/avatars/arparat.png`,
+  tichaiyut: `${ASSET_BASE}/avatars/tichaiyut.png`,
+  chonlasit: `${ASSET_BASE}/avatars/chonlasit.png`,
+  sorawee: `${ASSET_BASE}/avatars/sorawee.png`,
 };
 const KITCHEN_TYPE = { Task: "Food Piece", Bug: "Kitchen Issue" };
 const KITCHEN_STATUS = { "To Do": "Ready to Prep", "In Progress": "Cooking", Done: "Served" };
@@ -829,7 +831,7 @@ function TaskDashboard({ onLogout }) {
     if (IS_LOCAL_PREVIEW) {
       localStorage.setItem(`daily-plan:${planDate}:${currentUser}`, JSON.stringify(entries));
     } else {
-      const response = await fetch("/api/action", {
+      const response = await fetch(apiUrl("action"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "saveDailyPlan", actor: currentUser, payload: { planDate, personId: currentUser, entries } }),
@@ -859,7 +861,7 @@ function TaskDashboard({ onLogout }) {
       if (payload.newEpic) setEpicCatalog((current) => [...current, payload.newEpic]);
       if (payload.newStory) setStoryCatalog((current) => [...current, { id: `${epic.code}-${story.code}`, epicCode: epic.code, ...payload.newStory }]);
     } else {
-      const response = await fetch("/api/action", {
+      const response = await fetch(apiUrl("action"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "createTask", actor: currentUser === "All" ? payload.assignees[0] : currentUser, payload }),
@@ -875,7 +877,7 @@ function TaskDashboard({ onLogout }) {
   }
   async function saveTaskStatus(id, status) {
     if (!IS_LOCAL_PREVIEW) {
-      const response = await fetch("/api/action", {
+      const response = await fetch(apiUrl("action"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action: "updateStatus", actor: currentUser === "All" ? "team" : currentUser, payload: { id, status } }),
@@ -1023,7 +1025,7 @@ function LoginScreen({ onAuthenticated }) {
           setSubmitting(true);
           setError("");
           try {
-            const response = await fetch("/api/login", {
+            const response = await fetch(apiUrl("login"), {
               method: "POST",
               headers: { "content-type": "application/json" },
               body: JSON.stringify({ password }),
@@ -1057,7 +1059,7 @@ export function App() {
 
   useEffect(() => {
     if (IS_LOCAL_PREVIEW) return;
-    fetch("/api/session")
+    fetch(apiUrl("session"))
       .then((response) => response.json())
       .then((result) => setAuthenticated(Boolean(result.authenticated)))
       .catch(() => setAuthenticated(false))
@@ -1067,7 +1069,7 @@ export function App() {
   if (checking) return <main className="login-screen"><div className="login-loading">Preparing your workspace…</div></main>;
   if (!authenticated) return <LoginScreen onAuthenticated={() => setAuthenticated(true)} />;
   return <TaskDashboard onLogout={async () => {
-    await fetch("/api/logout", { method: "POST" }).catch(() => {});
+    await fetch(apiUrl("logout"), { method: "POST" }).catch(() => {});
     setAuthenticated(false);
   }} />;
 }
