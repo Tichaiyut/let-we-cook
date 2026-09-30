@@ -422,6 +422,7 @@ function Kitchen({ onSignOut }) {
           <CreateModal
             epics={data.epics}
             stories={data.stories}
+            taskIds={data.tasks.map((task) => task.id)}
             crew={crew}
             defaultChef={currentUser !== "All" ? currentUser : ""}
             onClose={() => setShowCreate(false)}

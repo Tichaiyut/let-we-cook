@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Plus, Receipt, X } from "@phosphor-icons/react";
+import { MagicWand, Plus, Receipt, X } from "@phosphor-icons/react";
+import { suggestCode } from "../lib/codes.js";
 import { isoDate, priorityFor } from "../lib/dates.js";
 import { ALL_STATUSES, STATIONS, TERMS } from "../lib/kitchen.js";
 
@@ -21,11 +22,23 @@ function HierarchyGuide() {
   );
 }
 
-export function CreateModal({ epics, stories, crew, defaultChef, onClose, onCreate }) {
+// Code field that fills itself from the name until someone types in it.
+function CodeField({ label, value, auto, onChange, onReset }) {
+  return (
+    <label className="code-field">
+      <span>{label} code {auto ? <em><MagicWand size={11} weight="bold" /> อัตโนมัติ</em> : <button type="button" onClick={onReset}>ใช้รหัสอัตโนมัติ</button>}</span>
+      <input required minLength={3} maxLength={3} value={value} placeholder="—" onChange={(event) => onChange(codeInput(event.target.value))} />
+    </label>
+  );
+}
+
+export function CreateModal({ epics, stories, taskIds, crew, defaultChef, onClose, onCreate }) {
   const [epicChoice, setEpicChoice] = useState(epics[0]?.code || NEW);
   const [newEpic, setNewEpic] = useState({ code: "", name: "", color: MENU_SWATCHES[0] });
+  const [epicCodeTyped, setEpicCodeTyped] = useState(false);
   const [storyChoice, setStoryChoice] = useState(NEW);
   const [newStory, setNewStory] = useState({ code: "", name: "" });
+  const [storyCodeTyped, setStoryCodeTyped] = useState(false);
   const [issueType, setIssueType] = useState("Task");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -40,9 +53,21 @@ export function CreateModal({ epics, stories, crew, defaultChef, onClose, onCrea
   const color = selectedEpic?.color || newEpic.color;
   const priority = priorityFor(dueDate, status);
 
+  const epicCode = epicCodeTyped ? newEpic.code : suggestCode(newEpic.name, epics.map((epic) => epic.code), "M");
+  const storyCode = storyCodeTyped ? newStory.code : suggestCode(newStory.name, storyOptions.map((story) => story.code), "C");
+  const menuPart = epicChoice === NEW ? epicCode : epicChoice;
+  const coursePart = storyChoice === NEW ? storyCode : stories.find((story) => story.id === storyChoice)?.code || "";
+  const idPrefix = `${menuPart || "???"}-${coursePart || "???"}-${issueType === "Bug" ? "B" : "T"}`;
+  const nextNumber = taskIds.reduce((max, id) => {
+    const match = id.startsWith(idPrefix) ? id.slice(idPrefix.length).match(/^(\d{4})$/) : null;
+    return match ? Math.max(max, Number(match[1])) : max;
+  }, 0) + 1;
+  const idPreview = `${idPrefix}${String(nextNumber).padStart(4, "0")}`;
+
   useEffect(() => {
     setStoryChoice(stories.find((story) => story.epicCode === epicChoice)?.id || NEW);
     setNewStory({ code: "", name: "" });
+    setStoryCodeTyped(false);
   }, [epicChoice, stories]);
 
   async function submit(event) {
@@ -51,9 +76,9 @@ export function CreateModal({ epics, stories, crew, defaultChef, onClose, onCrea
     setSaving(true);
     const created = await onCreate({
       epicCode: epicChoice === NEW ? "" : epicChoice,
-      newEpic: epicChoice === NEW ? { ...newEpic, name: newEpic.name.trim() } : null,
+      newEpic: epicChoice === NEW ? { ...newEpic, code: epicCode, name: newEpic.name.trim() } : null,
       storyId: storyChoice === NEW ? "" : storyChoice,
-      newStory: storyChoice === NEW ? { ...newStory, name: newStory.name.trim() } : null,
+      newStory: storyChoice === NEW ? { ...newStory, code: storyCode, name: newStory.name.trim() } : null,
       title: title.trim(),
       description: description.trim(),
       issueType,
@@ -101,15 +126,20 @@ export function CreateModal({ epics, stories, crew, defaultChef, onClose, onCrea
             {epicChoice === NEW && (
               <>
                 <label>
-                  <span>Menu code · 3 ตัว</span>
-                  <input required minLength={3} maxLength={3} value={newEpic.code} placeholder="IFM"
-                    onChange={(event) => setNewEpic((current) => ({ ...current, code: codeInput(event.target.value) }))} />
-                </label>
-                <label>
                   <span>Menu name</span>
                   <input required value={newEpic.name} placeholder="เช่น iFarm"
                     onChange={(event) => setNewEpic((current) => ({ ...current, name: event.target.value }))} />
                 </label>
+                <CodeField
+                  label="Menu"
+                  value={epicCode}
+                  auto={!epicCodeTyped}
+                  onChange={(code) => {
+                    setEpicCodeTyped(code !== "");
+                    setNewEpic((current) => ({ ...current, code }));
+                  }}
+                  onReset={() => setEpicCodeTyped(false)}
+                />
                 <div className="swatch-field">
                   <span>Menu color</span>
                   <div>
@@ -133,18 +163,24 @@ export function CreateModal({ epics, stories, crew, defaultChef, onClose, onCrea
             {storyChoice === NEW && (
               <>
                 <label>
-                  <span>Course code · 3 ตัว</span>
-                  <input required minLength={3} maxLength={3} value={newStory.code} placeholder="PER"
-                    onChange={(event) => setNewStory((current) => ({ ...current, code: codeInput(event.target.value) }))} />
-                </label>
-                <label>
                   <span>Course name</span>
                   <input required value={newStory.name} placeholder="เช่น Performance Dashboard"
                     onChange={(event) => setNewStory((current) => ({ ...current, name: event.target.value }))} />
                 </label>
+                <CodeField
+                  label="Course"
+                  value={storyCode}
+                  auto={!storyCodeTyped}
+                  onChange={(code) => {
+                    setStoryCodeTyped(code !== "");
+                    setNewStory((current) => ({ ...current, code }));
+                  }}
+                  onReset={() => setStoryCodeTyped(false)}
+                />
               </>
             )}
           </div>
+          <p className="id-preview">ID ของงานนี้จะเป็น <b>{idPreview}</b></p>
         </fieldset>
 
         <fieldset>

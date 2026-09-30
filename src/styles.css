@@ -439,6 +439,13 @@ h1, h2, h3, strong { font-weight: 600; }
 .order-form textarea { min-height: 76px; padding: 10px 11px; line-height: 1.5; resize: vertical; }
 .order-form input:focus, .order-form select:focus, .order-form textarea:focus { border-color: var(--menu); outline: 3px solid color-mix(in srgb, var(--menu) 22%, transparent); }
 .full-field { display: block; }
+.code-field > span { display: flex !important; align-items: center; gap: 6px; }
+.code-field em, .code-field button { margin-left: auto; display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-style: normal; font-weight: 600; }
+.code-field em { color: var(--basil); }
+.code-field button { padding: 0; border: 0; color: var(--tomato-deep); background: none; text-decoration: underline; text-underline-offset: 2px; }
+.code-field input { font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.id-preview { margin: 0; padding: 8px 12px; border-radius: 10px; color: var(--ink-soft); background: var(--linen); font-size: 12.5px; }
+.id-preview b { color: var(--menu); letter-spacing: .03em; white-space: nowrap; }
 .segmented { height: 40px; padding: 3px; border: 1px solid var(--line-strong); border-radius: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 3px; background: var(--linen); }
 .segmented button { border: 0; border-radius: 7px; color: var(--ink-soft); background: transparent; font-size: 12.5px; font-weight: 600; }
 .segmented button.active { color: #fff; background: var(--menu); box-shadow: 0 2px 0 rgb(0 0 0 / 18%); }
