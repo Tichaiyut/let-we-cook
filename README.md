@@ -44,7 +44,9 @@ let-we-cook/
 3. ลบโค้ดเดิมทั้งหมด วางเนื้อหาจาก [`apps-script/Code.gs`](apps-script/Code.gs) แล้วกด **Save**
 4. (แนะนำ) **Project Settings** → ติ๊ก *Show "appsscript.json" manifest file in editor* แล้ววางเนื้อหาจาก [`apps-script/appsscript.json`](apps-script/appsscript.json)
 5. กลับไปที่แท็บ Google Sheet แล้ว **รีเฟรชหน้า** จะมีเมนู **🍳 Let We Cook** เพิ่มขึ้นมา
-6. เมนู 🍳 Let We Cook → **1) ตั้งค่าเริ่มต้น** (ครั้งแรก Google จะขอสิทธิ์ ให้กดอนุญาต)
+6. เมนู 🍳 Let We Cook → **1) ตั้งค่าเริ่มต้น** ครั้งแรก Google จะขอสิทธิ์
+   - ถ้าเจอหน้า **"Google hasn't verified this app"** ให้ดูว่าอีเมล developer เป็นบัญชีของเราเองไหม ถ้าใช่ แปลว่าเป็นสคริปต์ที่เราเพิ่งวางเอง ปลอดภัย ให้กด **Advanced → Go to … (unsafe) → Allow**
+   - สิทธิ์ที่ขอมี 2 อย่าง คือแก้ไข Google Sheets (อ่านและเขียนงาน) และแสดงหน้าต่างในแอป Google (เมนูและกล่องตั้งรหัส)
 7. เมนู 🍳 Let We Cook → **2) ตั้ง / เปลี่ยนรหัสผ่านทีม** ต้องมีอย่างน้อย 8 ตัว และ**ห้ามใช้รหัสเดียวกับระบบเก่า**
 8. กลับไปที่หน้า Apps Script: **Deploy → New deployment** → ⚙️ เลือก **Web app**
    - Execute as: **Me**
