@@ -111,9 +111,26 @@ export function createSampleKitchen(ApiError) {
     return { id: `${storyId}-${itemCode}`, itemCode };
   };
 
+  const sampleMe = { kind: "chef", id: "sorawee", name: "Sorawee" };
+
   return {
-    async login() {
-      return wait({ ok: true });
+    // `npm run dev` skips the login screen and acts as Sorawee.
+    sampleMe,
+    async roster() {
+      return wait({ ok: true, chefs: db.people.filter((person) => person.active).map((person) => ({ ...person, hasPin: true })) });
+    },
+    async teamLogin() {
+      return wait({ ok: true, me: { kind: "team", id: "team", name: "Team" } });
+    },
+    async chefLogin(personId) {
+      return wait({ ok: true, me: { kind: "chef", id: personId, name: personId } });
+    },
+    async setupPin(personId) {
+      return wait({ ok: true, me: { kind: "chef", id: personId, name: personId } });
+    },
+    async changePin(currentPin, newPin) {
+      if (!/^\d{4}$/.test(newPin)) throw new ApiError("PIN ต้องเป็นตัวเลข 4 หลัก");
+      return wait({ ok: true, me: sampleMe });
     },
     async bootstrap() {
       return wait(snapshot());
@@ -122,6 +139,7 @@ export function createSampleKitchen(ApiError) {
       return wait({ ok: true, entries: db.plans[`${planDate}:${personId}`] || [] });
     },
     async saveDailyPlan(planDate, personId, entries) {
+      if (personId !== sampleMe.id) throw new ApiError("แก้ได้เฉพาะเมนูวันนี้ของตัวเอง");
       db.plans[`${planDate}:${personId}`] = entries;
       persist();
       return wait({ ok: true, saved: entries.length });

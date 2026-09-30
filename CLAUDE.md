@@ -19,11 +19,15 @@ Team task tracker for the 4-person TechFeed team. React 19 + Vite static site on
 - Editing can change everything; changing course or Task↔Bug re-IDs the ticket and moves its Task Assignees and Daily Plans references (logged as "Moved").
 - Never ask the user to edit sheet headers by hand; Code.gs reads columns by header name.
 
-## Auth model (in Code.gs)
+## Auth model (in Code.gs, API 2.2)
 
-- Shared team password, salted + iterated HMAC-SHA256 in Script Properties; set via the sheet menu `🍳 Let We Cook`. Changing it rotates `TOKEN_SECRET` (signs everyone out).
-- Stateless HMAC token, 2-hour expiry, sent in the POST body. All requests are `text/plain` POSTs so Apps Script CORS works without preflight.
-- Apps Script cannot see client IPs: 5 wrong passwords lock a browser (`clientId` in localStorage) for 2h; 20 wrong passwords site-wide within 10 min pause all logins for 15 min (CacheService).
+- **Each chef has a 4-digit PIN.** First visit: pick your name → team password → choose PIN (`setupPin`). Obvious PINs (0000, 1234…) are rejected. The owner resets a forgotten PIN from the sheet menu (`resetChefPin`); there is deliberately no self-service reset.
+- **The team password is a backup login** that acts as `team`: full task access, but Today's menu is read-only. It is also the proof of team membership when setting a first PIN.
+- Secrets are salted + iterated HMAC-SHA256 in Script Properties (`PASSWORD_*`, `PIN_HASH_<id>`, `PIN_SALT_<id>`, `PIN_VER_<id>`). Changing the team password rotates `TOKEN_SECRET` (everyone out); changing/resetting a PIN bumps that chef's `PIN_VER` (only they are signed out).
+- Token = `expires.who.pinVersion.nonce.hmac`, 2-hour expiry, sent in the POST body. **The server takes the actor from the token** — never from the request body.
+- All requests are `text/plain` POSTs so Apps Script CORS works without preflight. `roster`, `login`, `chefLogin`, `setupPin` are the only unauthenticated actions.
+- Apps Script cannot see client IPs: 5 wrong PINs lock **that chef** for 2h (any device); 5 wrong team passwords lock a browser (`clientId`); 20 failures site-wide in 10 min pause all logins for 15 min (CacheService).
+- Today's menu: anyone signed in can read any chef's plan; only that chef can save it.
 - `safeCell_` prefixes `'` to text starting with `= + - @` to stop formula injection.
 
 ## Working on it

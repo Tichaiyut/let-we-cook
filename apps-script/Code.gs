@@ -4,11 +4,11 @@
  * Bound to the "Let We Cook - Task Database" Google Sheet (Extensions → Apps Script).
  * Setup and deployment steps are in README.md of the let-we-cook repository.
  *
- * Nothing secret lives in this file: the team password (salted hash) and the
- * key that signs login sessions are stored in Script Properties.
+ * Nothing secret lives in this file: the team password, every chef's PIN
+ * (salted hashes) and the key that signs sessions are stored in Script Properties.
  */
 
-const API_VERSION = "2.1";
+const API_VERSION = "2.2";
 const TIMEZONE = "Asia/Bangkok";
 const SHEETS = {
   PEOPLE: "People",
@@ -23,18 +23,20 @@ const STATUSES = ["Backlog", "To Do", "In Progress", "Done"];
 const MAX_ASSIGNEES = 4;
 const MAX_PLAN_ENTRIES = 50;
 const DELETE_COLUMNS = ["Deleted", "DeletedAt", "DeletedBy"];
+const TEAM = "team";
 
 const SESSION_SECONDS = 2 * 60 * 60;
-const CLIENT_MAX_FAILURES = 5;
-const CLIENT_LOCK_SECONDS = 2 * 60 * 60;
+const MAX_FAILURES = 5;
+const LOCK_SECONDS = 2 * 60 * 60;
 const GLOBAL_MAX_FAILURES = 20;
 const GLOBAL_WINDOW_SECONDS = 10 * 60;
 const GLOBAL_PAUSE_SECONDS = 15 * 60;
 const PASSWORD_MIN_LENGTH = 8;
 const PASSWORD_ROUNDS = 500;
+const WEAK_PINS = ["1234", "2345", "3456", "4567", "5678", "6789", "0123", "9876", "8765", "7654", "6543", "5432", "4321", "3210", "1212", "2580"];
 
 // ---------------------------------------------------------------------------
-// Sheet menu: one-time setup for the sheet owner
+// Sheet menu: setup for the sheet owner
 // ---------------------------------------------------------------------------
 
 function onOpen() {
@@ -42,6 +44,7 @@ function onOpen() {
     .createMenu("🍳 Let We Cook")
     .addItem("1) ตั้งค่าเริ่มต้น", "setupLetWeCook")
     .addItem("2) ตั้ง / เปลี่ยนรหัสผ่านทีม", "setTeamPassword")
+    .addItem("3) รีเซ็ต PIN ของเชฟ", "resetChefPin")
     .addSeparator()
     .addItem("ตรวจสถานะระบบ", "showSetupStatus")
     .addToUi();
@@ -63,7 +66,7 @@ function setTeamPassword() {
   const ui = SpreadsheetApp.getUi();
   const first = ui.prompt(
     "ตั้งรหัสผ่านทีม",
-    "อย่างน้อย " + PASSWORD_MIN_LENGTH + " ตัวอักษร และห้ามซ้ำกับรหัสของระบบเก่า",
+    "อย่างน้อย " + PASSWORD_MIN_LENGTH + " ตัวอักษร · ใช้เข้าเว็บแบบสำรอง และใช้ตอนเชฟตั้ง PIN ครั้งแรก",
     ui.ButtonSet.OK_CANCEL
   );
   if (first.getSelectedButton() !== ui.Button.OK) return;
@@ -82,14 +85,30 @@ function setTeamPassword() {
   ui.alert("บันทึกรหัสผ่านทีมแล้ว ✅\nใครที่ล็อกอินค้างอยู่จะต้องเข้าสู่ระบบใหม่");
 }
 
+function resetChefPin() {
+  const ui = SpreadsheetApp.getUi();
+  const ids = rows_(SHEETS.PEOPLE).map(row => String(row.PersonID)).filter(Boolean);
+  const answer = ui.prompt("รีเซ็ต PIN ของเชฟ", "พิมพ์ PersonID ของคนที่ลืม PIN: " + ids.join(", "), ui.ButtonSet.OK_CANCEL);
+  if (answer.getSelectedButton() !== ui.Button.OK) return;
+  const personId = answer.getResponseText().trim().toLowerCase();
+  if (ids.indexOf(personId) === -1) {
+    ui.alert("ไม่พบ PersonID: " + personId);
+    return;
+  }
+  clearPin_(personId);
+  ui.alert("รีเซ็ต PIN ของ " + personId + " แล้ว ✅\nให้เจ้าตัวเข้าเว็บ เลือกชื่อ แล้วตั้ง PIN ใหม่ด้วยรหัสทีม");
+}
+
 function showSetupStatus() {
   const props = PropertiesService.getScriptProperties();
+  const chefs = rows_(SHEETS.PEOPLE).filter(row => isTrue_(row.Active))
+    .map(row => "   " + row.PersonID + ": " + (props.getProperty(pinKey_(row.PersonID, "HASH")) ? "✅ ตั้ง PIN แล้ว" : "⏳ ยังไม่ได้ตั้ง PIN"));
   return notify_([
     "Spreadsheet: " + (props.getProperty("SPREADSHEET_ID") ? "✅" : "❌ ยังไม่ได้รัน 1) ตั้งค่าเริ่มต้น"),
     "รหัสผ่านทีม: " + (props.getProperty("PASSWORD_HASH") ? "✅" : "❌ ยังไม่ได้ตั้ง"),
     "Session key: " + (props.getProperty("TOKEN_SECRET") ? "✅" : "❌"),
-    "API version: " + API_VERSION,
-  ].join("\n"));
+    "PIN ของเชฟ:",
+  ].concat(chefs, ["API version: " + API_VERSION]).join("\n"));
 }
 
 function storePassword_(password) {
@@ -134,14 +153,18 @@ function doPost(e) {
 
 function route_(body) {
   const action = String(body.action || "");
-  if (action === "login") return login_(body.password, body.clientId);
-  if (!verifyToken_(body.token)) {
-    return { ok: false, code: "AUTH", error: "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่" };
-  }
+  if (action === "roster") return { ok: true, chefs: roster_() };
+  if (action === "login") return teamLogin_(body.password, body.clientId);
+  if (action === "chefLogin") return chefLogin_(body.personId, body.pin);
+  if (action === "setupPin") return setupPin_(body.personId, body.teamPassword, body.pin, body.clientId);
+
+  const session = verifyToken_(body.token);
+  if (!session) return { ok: false, code: "AUTH", error: "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่" };
   const payload = body.payload || {};
-  const actor = cleanText_(body.actor || "team", 80);
-  if (action === "session") return { ok: true, authenticated: true };
-  if (action === "bootstrap") return Object.assign({ ok: true }, buildBootstrap_());
+  const actor = session.who; // who did it always comes from the signed session
+  if (action === "session") return { ok: true, authenticated: true, me: me_(actor) };
+  if (action === "changePin") return changePin_(session, body.currentPin, body.newPin);
+  if (action === "bootstrap") return Object.assign({ ok: true, me: me_(actor) }, buildBootstrap_());
   if (action === "getDailyPlan") return { ok: true, entries: getDailyPlan_(payload) };
   if (action === "saveDailyPlan") return { ok: true, saved: saveDailyPlan_(payload, actor) };
   if (action === "createTask") return Object.assign({ ok: true }, createTask_(payload, actor));
@@ -157,21 +180,93 @@ function json_(value) {
 }
 
 // ---------------------------------------------------------------------------
-// Login, sessions and brute-force protection
+// Identities: every chef logs in with their own 4-digit PIN; the team
+// password is a backup entrance that acts as "team".
 //
-// Apps Script cannot see the visitor's IP, so protection has two layers:
-// - per browser (random clientId): 5 wrong passwords → locked for 2 hours
-// - whole site: 20 wrong passwords within 10 minutes → logins paused 15 minutes
+// Apps Script cannot see the visitor's IP, so brute force is limited by:
+// - per chef: 5 wrong PINs from anywhere → that chef is locked for 2 hours
+// - per browser (random clientId): 5 wrong team passwords → locked for 2 hours
+// - whole site: 20 wrong attempts within 10 minutes → all logins paused 15 minutes
 // ---------------------------------------------------------------------------
 
-function login_(password, rawClientId) {
+function pinKey_(personId, part) {
+  return "PIN_" + part + "_" + String(personId).toLowerCase();
+}
+
+function activeChef_(personId) {
+  const id = String(personId || "").trim().toLowerCase();
+  const row = rows_(SHEETS.PEOPLE).find(item => String(item.PersonID).toLowerCase() === id && isTrue_(item.Active));
+  if (!row) throw new Error("ไม่พบเชฟคนนี้ในทีม");
+  return { id: id, name: String(row.DisplayName || row.PersonID) };
+}
+
+function me_(who) {
+  if (who === TEAM) return { kind: "team", id: TEAM, name: "Team" };
+  const row = rows_(SHEETS.PEOPLE).find(item => String(item.PersonID).toLowerCase() === who) || {};
+  return { kind: "chef", id: who, name: String(row.DisplayName || who) };
+}
+
+function roster_() {
+  const props = PropertiesService.getScriptProperties();
+  return rows_(SHEETS.PEOPLE).filter(row => isTrue_(row.Active)).map(row => ({
+    id: String(row.PersonID).toLowerCase(),
+    name: String(row.DisplayName || row.PersonID),
+    characterName: String(row.CharacterName || ""),
+    hasPin: Boolean(props.getProperty(pinKey_(row.PersonID, "HASH"))),
+  }));
+}
+
+function validPin_(pin) {
+  const value = String(pin || "");
+  if (!/^\d{4}$/.test(value)) throw new Error("PIN ต้องเป็นตัวเลข 4 หลัก");
+  if (/^(\d)\1{3}$/.test(value) || WEAK_PINS.indexOf(value) !== -1) throw new Error("PIN นี้เดาง่ายเกินไป ลองตัวเลขอื่น");
+  return value;
+}
+
+function storePin_(personId, pin) {
+  const salt = randomSecret_();
+  const props = PropertiesService.getScriptProperties();
+  props.setProperties({
+    [pinKey_(personId, "SALT")]: salt,
+    [pinKey_(personId, "HASH")]: hashPassword_(pin, salt),
+    [pinKey_(personId, "VER")]: String(Number(props.getProperty(pinKey_(personId, "VER")) || 0) + 1),
+  });
+}
+
+function clearPin_(personId) {
+  const props = PropertiesService.getScriptProperties();
+  props.deleteProperty(pinKey_(personId, "SALT"));
+  props.deleteProperty(pinKey_(personId, "HASH"));
+  props.setProperty(pinKey_(personId, "VER"), String(Number(props.getProperty(pinKey_(personId, "VER")) || 0) + 1));
+  CacheService.getScriptCache().remove("login:chef:" + String(personId).toLowerCase());
+}
+
+function pinMatches_(personId, pin) {
+  const props = PropertiesService.getScriptProperties();
+  const hash = props.getProperty(pinKey_(personId, "HASH"));
+  const salt = props.getProperty(pinKey_(personId, "SALT"));
+  return Boolean(hash && salt) && safeEqual_(hashPassword_(String(pin || ""), salt), hash);
+}
+
+function teamPasswordMatches_(password) {
   const props = PropertiesService.getScriptProperties();
   const hash = props.getProperty("PASSWORD_HASH");
   const salt = props.getProperty("PASSWORD_SALT");
-  if (!hash || !salt || !props.getProperty("TOKEN_SECRET")) {
-    return { ok: false, code: "NOT_CONFIGURED", error: "ยังไม่ได้ตั้งรหัสผ่านทีม เจ้าของชีทต้องตั้งจากเมนู 🍳 Let We Cook ก่อน" };
-  }
-  const clientKey = "login:client:" + String(rawClientId || "unknown").replace(/[^A-Za-z0-9-]/g, "").slice(0, 64);
+  return safeEqual_(hashPassword_(String(password || ""), salt), hash);
+}
+
+function teamPasswordReady_() {
+  const props = PropertiesService.getScriptProperties();
+  return Boolean(props.getProperty("PASSWORD_HASH") && props.getProperty("PASSWORD_SALT") && props.getProperty("TOKEN_SECRET"));
+}
+
+function notConfigured_() {
+  return { ok: false, code: "NOT_CONFIGURED", error: "ยังไม่ได้ตั้งรหัสผ่านทีม เจ้าของชีทต้องตั้งจากเมนู 🍳 Let We Cook ก่อน" };
+}
+
+// Runs one login attempt against a lock key. `check` returns true when the
+// secret is right; `onSuccess` builds the response.
+function guardedAttempt_(lockKey, lockMessage, check, onSuccess) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
@@ -181,20 +276,17 @@ function login_(password, rawClientId) {
     if (pausedUntil > now) {
       return lockedResponse_("PAUSED", pausedUntil - now, "มีการใส่รหัสผิดหลายครั้ง ระบบพักการเข้าสู่ระบบชั่วคราว");
     }
-    const client = readCacheJson_(cache, clientKey) || { failures: 0, lockedUntil: 0 };
-    if (client.lockedUntil > now) {
-      return lockedResponse_("LOCKED", client.lockedUntil - now, "ใส่รหัสผิดครบ " + CLIENT_MAX_FAILURES + " ครั้ง เบราว์เซอร์นี้ถูกล็อก 2 ชั่วโมง");
+    const state = readCacheJson_(cache, lockKey) || { failures: 0, lockedUntil: 0 };
+    if (state.lockedUntil > now) return lockedResponse_("LOCKED", state.lockedUntil - now, lockMessage);
+
+    if (check()) {
+      cache.remove(lockKey);
+      return onSuccess();
     }
 
-    if (safeEqual_(hashPassword_(String(password || ""), salt), hash)) {
-      cache.remove(clientKey);
-      const expiresAt = now + SESSION_SECONDS;
-      return { ok: true, token: issueToken_(expiresAt), expiresAt: expiresAt * 1000 };
-    }
-
-    client.failures += 1;
-    if (client.failures >= CLIENT_MAX_FAILURES) client.lockedUntil = now + CLIENT_LOCK_SECONDS;
-    cache.put(clientKey, JSON.stringify(client), CLIENT_LOCK_SECONDS);
+    state.failures += 1;
+    if (state.failures >= MAX_FAILURES) state.lockedUntil = now + LOCK_SECONDS;
+    cache.put(lockKey, JSON.stringify(state), LOCK_SECONDS);
 
     const previous = readCacheJson_(cache, "login:global");
     const windowState = previous && now - previous.startedAt < GLOBAL_WINDOW_SECONDS ? previous : { failures: 0, startedAt: now };
@@ -206,14 +298,80 @@ function login_(password, rawClientId) {
       cache.put("login:global", JSON.stringify(windowState), GLOBAL_WINDOW_SECONDS);
     }
 
-    if (client.lockedUntil > now) {
-      return lockedResponse_("LOCKED", CLIENT_LOCK_SECONDS, "ใส่รหัสผิดครบ " + CLIENT_MAX_FAILURES + " ครั้ง เบราว์เซอร์นี้ถูกล็อก 2 ชั่วโมง");
-    }
-    const remaining = CLIENT_MAX_FAILURES - client.failures;
-    return { ok: false, code: "WRONG_PASSWORD", remaining: remaining, error: "รหัสผ่านไม่ถูกต้อง เหลือโอกาสอีก " + remaining + " ครั้ง" };
+    if (state.lockedUntil > now) return lockedResponse_("LOCKED", LOCK_SECONDS, lockMessage);
+    const remaining = MAX_FAILURES - state.failures;
+    return { ok: false, code: "WRONG_PASSWORD", remaining: remaining, error: "รหัสไม่ถูกต้อง เหลือโอกาสอีก " + remaining + " ครั้ง" };
   } finally {
     lock.releaseLock();
   }
+}
+
+function clientKey_(rawClientId) {
+  return "login:client:" + String(rawClientId || "unknown").replace(/[^A-Za-z0-9-]/g, "").slice(0, 64);
+}
+
+function sessionResponse_(who) {
+  return Object.assign({ ok: true, me: me_(who) }, issueToken_(who));
+}
+
+function teamLogin_(password, clientId) {
+  if (!teamPasswordReady_()) return notConfigured_();
+  return guardedAttempt_(
+    clientKey_(clientId),
+    "ใส่รหัสทีมผิดครบ " + MAX_FAILURES + " ครั้ง เบราว์เซอร์นี้ถูกล็อก 2 ชั่วโมง",
+    () => teamPasswordMatches_(password),
+    () => sessionResponse_(TEAM)
+  );
+}
+
+function chefLogin_(personId, pin) {
+  if (!teamPasswordReady_()) return notConfigured_();
+  const chef = activeChef_(personId);
+  if (!PropertiesService.getScriptProperties().getProperty(pinKey_(chef.id, "HASH"))) {
+    return { ok: false, code: "PIN_NOT_SET", error: chef.name + " ยังไม่ได้ตั้ง PIN" };
+  }
+  return guardedAttempt_(
+    "login:chef:" + chef.id,
+    "PIN ของ " + chef.name + " ผิดครบ " + MAX_FAILURES + " ครั้ง ชื่อนี้ถูกล็อก 2 ชั่วโมง (เข้าด้วยรหัสทีมได้)",
+    () => pinMatches_(chef.id, pin),
+    () => sessionResponse_(chef.id)
+  );
+}
+
+// First visit: a chef proves they are on the team with the team password,
+// then chooses their own PIN and is signed in straight away.
+function setupPin_(personId, teamPassword, pin, clientId) {
+  if (!teamPasswordReady_()) return notConfigured_();
+  const chef = activeChef_(personId);
+  if (PropertiesService.getScriptProperties().getProperty(pinKey_(chef.id, "HASH"))) {
+    return { ok: false, code: "PIN_ALREADY_SET", error: chef.name + " ตั้ง PIN ไว้แล้ว ถ้าลืม PIN ให้เจ้าของชีทรีเซ็ตจากเมนู 🍳" };
+  }
+  const newPin = validPin_(pin);
+  return guardedAttempt_(
+    clientKey_(clientId),
+    "ใส่รหัสทีมผิดครบ " + MAX_FAILURES + " ครั้ง เบราว์เซอร์นี้ถูกล็อก 2 ชั่วโมง",
+    () => teamPasswordMatches_(teamPassword),
+    () => {
+      storePin_(chef.id, newPin);
+      log_(chef.id, "", "PIN set", "", chef.id, "first visit");
+      return sessionResponse_(chef.id);
+    }
+  );
+}
+
+function changePin_(session, currentPin, newPin) {
+  if (session.who === TEAM) throw new Error("เข้าด้วยรหัสทีมอยู่ เปลี่ยน PIN ไม่ได้");
+  const pin = validPin_(newPin);
+  return guardedAttempt_(
+    "login:chef:" + session.who,
+    "PIN ผิดครบ " + MAX_FAILURES + " ครั้ง ชื่อนี้ถูกล็อก 2 ชั่วโมง",
+    () => pinMatches_(session.who, currentPin),
+    () => {
+      storePin_(session.who, pin); // bumps the version: other devices are signed out
+      log_(session.who, "", "PIN changed", "", session.who, "");
+      return sessionResponse_(session.who);
+    }
+  );
 }
 
 function lockedResponse_(code, retryAfter, message) {
@@ -228,18 +386,28 @@ function readCacheJson_(cache, key) {
   }
 }
 
-function issueToken_(expiresAt) {
-  const payload = expiresAt + "." + Utilities.getUuid().replace(/-/g, "").slice(0, 16);
-  return payload + "." + sign_(payload, tokenSecret_());
+// Token: expires.who.pinVersion.nonce.signature — a chef's tokens stop
+// working as soon as their PIN is changed or reset.
+function issueToken_(who) {
+  const expiresAt = nowSeconds_() + SESSION_SECONDS;
+  const version = who === TEAM ? "0" : String(PropertiesService.getScriptProperties().getProperty(pinKey_(who, "VER")) || "0");
+  const payload = [expiresAt, who, version, Utilities.getUuid().replace(/-/g, "").slice(0, 16)].join(".");
+  return { token: payload + "." + sign_(payload, tokenSecret_()), expiresAt: expiresAt * 1000 };
 }
 
 function verifyToken_(token) {
   const parts = String(token || "").split(".");
-  if (parts.length !== 3 || !/^\d+$/.test(parts[0])) return false;
-  if (Number(parts[0]) <= nowSeconds_()) return false;
+  if (parts.length !== 5 || !/^\d+$/.test(parts[0])) return null;
+  if (Number(parts[0]) <= nowSeconds_()) return null;
   const secret = tokenSecret_();
-  if (!secret) return false;
-  return safeEqual_(sign_(parts[0] + "." + parts[1], secret), parts[2]);
+  if (!secret || !safeEqual_(sign_(parts.slice(0, 4).join("."), secret), parts[4])) return null;
+  const who = parts[1];
+  if (who !== TEAM) {
+    const props = PropertiesService.getScriptProperties();
+    if (!props.getProperty(pinKey_(who, "HASH"))) return null;
+    if (String(props.getProperty(pinKey_(who, "VER")) || "0") !== parts[2]) return null;
+  }
+  return { who: who };
 }
 
 function tokenSecret_() {
@@ -786,6 +954,8 @@ function saveDailyPlan_(payload, actor) {
   const key = planKey_(payload);
   const people = rows_(SHEETS.PEOPLE).map(row => String(row.PersonID));
   if (people.indexOf(key.personId) === -1) throw new Error("Unknown chef");
+  if (actor === TEAM) throw new Error("เข้าด้วยรหัสทีมอยู่ ดูเมนูวันนี้ได้อย่างเดียว เข้าด้วย PIN ของตัวเองเพื่อแก้ไข");
+  if (actor !== key.personId) throw new Error("แก้ได้เฉพาะเมนูวันนี้ของตัวเอง");
   const entries = (Array.isArray(payload.entries) ? payload.entries : []).slice(0, MAX_PLAN_ENTRIES);
   return withLock_(() => {
     const sheet = sheet_(SHEETS.PLANS);

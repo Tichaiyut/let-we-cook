@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowClockwise, BowlSteam, CalendarBlank, ChefHat, ClipboardText, CookingPot, Fire, ForkKnife,
-  Info, Knife, Plus, SignOut, Sparkle, Timer, Trash, UsersThree, WarningCircle,
+  Info, Key, Knife, Plus, SignOut, Sparkle, Timer, Trash, UsersThree, WarningCircle,
 } from "@phosphor-icons/react";
 import { api, MODE } from "./api.js";
 import { daysUntil, formatLongDate, isoDate, sortByDueDateOldestFirst } from "./lib/dates.js";
@@ -12,7 +12,8 @@ import { BinTable } from "./components/BinTable.jsx";
 import { EditModal } from "./components/EditModal.jsx";
 import { CreateModal } from "./components/CreateModal.jsx";
 import { CrewPage } from "./components/CrewPage.jsx";
-import { CrewContext, Filter } from "./components/common.jsx";
+import { ChangePinModal } from "./components/ChangePinModal.jsx";
+import { ChefAvatar, CrewContext, Filter } from "./components/common.jsx";
 import { LoginScreen, SetupNotice } from "./components/LoginScreen.jsx";
 import { TaskCard } from "./components/TaskCard.jsx";
 import { TaskDetailModal } from "./components/TaskDetailModal.jsx";
@@ -30,8 +31,11 @@ export function App() {
   if (!authenticated) {
     return <LoginScreen notice={notice} onAuthenticated={() => { setNotice(""); setAuthenticated(true); }} />;
   }
+  const me = api.me() || { kind: "team", id: "team", name: "Team" };
   return (
     <Kitchen
+      key={me.id}
+      me={me}
       onSignOut={(reason = "") => {
         api.logout();
         setNotice(reason);
@@ -52,14 +56,17 @@ function toKitchenData(result) {
   };
 }
 
-function Kitchen({ onSignOut }) {
+function Kitchen({ me, onSignOut }) {
+  const isChef = me.kind === "chef";
   const [data, setData] = useState({ tasks: [], trash: [], people: [], epics: [], stories: [] });
   const [loadState, setLoadState] = useState("loading");
   const [loadError, setLoadError] = useState("");
   const [page, setPage] = useState("kitchen");
   const [tab, setTab] = useState("board");
   const [filters, setFilters] = useState(EMPTY_FILTERS);
-  const [currentUser, setCurrentUser] = useState("All");
+  const [currentUser, setCurrentUser] = useState(isChef ? me.id : "All");
+  const [showPin, setShowPin] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [planDate, setPlanDate] = useState(() => isoDate(new Date()));
   const [plan, setPlan] = useState({ entries: [], loading: false, saving: false, dirty: false });
   const [showCreate, setShowCreate] = useState(false);
@@ -110,6 +117,8 @@ function Kitchen({ onSignOut }) {
       setShowCreate(false);
       setSelectedId(null);
       setEditingId(null);
+      setShowPin(false);
+      setMenuOpen(false);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -181,7 +190,10 @@ function Kitchen({ onSignOut }) {
   const binnedIds = useMemo(() => new Set(data.trash.map((task) => task.id)), [data.trash]);
   const planEntries = plan.entries.map((entry) => ({ ...entry, task: tasksById[entry.taskId] || null, binned: binnedIds.has(entry.taskId) }));
   const selectedTask = selectedId ? tasksById[selectedId] : null;
-  const actor = currentUser !== "All" ? currentUser : "team";
+  // The server takes the actor from the signed session; this only matters for sample data.
+  const actor = me.id;
+  const canEditPlan = isChef && currentUser === me.id;
+  const homeUser = isChef ? me.id : "All";
 
   function confirmLeavingPlan() {
     return !plan.dirty || window.confirm("เมนูวันนี้ยังไม่ได้บันทึก ต้องการเปลี่ยนโดยไม่บันทึกใช่ไหม?");
@@ -196,7 +208,7 @@ function Kitchen({ onSignOut }) {
   function setFilter(key, value) {
     if (key === "chef") {
       const isCrew = crew.some((person) => person.id === value);
-      const nextUser = value === "All" || isCrew ? value : "All";
+      const nextUser = isCrew ? value : homeUser;
       if (nextUser !== currentUser && !confirmLeavingPlan()) return;
       setCurrentUser(nextUser);
     }
@@ -204,14 +216,14 @@ function Kitchen({ onSignOut }) {
   }
 
   function clearFilters() {
-    if (currentUser !== "All" && !confirmLeavingPlan()) return;
-    setCurrentUser("All");
+    if (currentUser !== homeUser && !confirmLeavingPlan()) return;
+    setCurrentUser(homeUser);
     setFilters(EMPTY_FILTERS);
   }
 
   function addToPlan(task) {
-    if (currentUser === "All") {
-      notify("เลือกเชฟในกระดานเมนูวันนี้ก่อน", "error");
+    if (!canEditPlan) {
+      notify(isChef ? "เพิ่มได้เฉพาะเมนูวันนี้ของตัวเอง เลือกชื่อตัวเองในกระดานก่อน" : "เข้าด้วยรหัสทีมอยู่ ดูเมนูวันนี้ได้อย่างเดียว", "error");
       return;
     }
     if (plan.entries.some((entry) => entry.taskId === task.id)) {
@@ -344,11 +356,27 @@ function Kitchen({ onSignOut }) {
           <button className="create-button" type="button" onClick={() => setShowCreate(true)} disabled={loadState !== "ready"}>
             <Plus size={16} weight="bold" /> Add Food Piece
           </button>
-          {MODE === "live" && (
-            <button className="icon-button" type="button" onClick={() => onSignOut()} title="Sign out" aria-label="Sign out">
-              <SignOut size={18} weight="bold" />
+          <div className="me-menu">
+            <button type="button" className="me-chip" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>
+              {isChef ? <ChefAvatar id={me.id} size={30} /> : <span className="team-badge"><UsersThree size={17} weight="bold" /></span>}
+              <span><b>{isChef ? me.name : "Team"}</b><small>{isChef ? "ออกจากครัว / PIN" : "รหัสทีม · ดูเมนูอย่างเดียว"}</small></span>
             </button>
-          )}
+            {menuOpen && (
+              <div className="me-dropdown" role="menu" onMouseLeave={() => setMenuOpen(false)}>
+                {isChef && (
+                  <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); setShowPin(true); }}>
+                    <Key size={16} weight="bold" /> เปลี่ยน PIN
+                  </button>
+                )}
+                {MODE === "live" && (
+                  <button type="button" role="menuitem" onClick={() => onSignOut()}>
+                    <SignOut size={16} weight="bold" /> ออกจากระบบ
+                  </button>
+                )}
+                {MODE === "sample" && <span>โหมดข้อมูลตัวอย่าง (npm run dev)</span>}
+              </div>
+            )}
+          </div>
         </header>
         <div className="tablecloth" aria-hidden="true" />
 
@@ -429,6 +457,8 @@ function Kitchen({ onSignOut }) {
               <div className="work-area">
                 <TodayPlan
                   crew={crew}
+                  me={me}
+                  editable={canEditPlan}
                   currentUser={currentUser}
                   onUserChange={chooseChef}
                   planDate={planDate}
@@ -457,7 +487,7 @@ function Kitchen({ onSignOut }) {
                         </header>
                         <div className="station-body">
                           {board[status].map((task) => (
-                            <TaskCard key={task.id} task={task} canPlan={currentUser !== "All"} onAddToPlan={addToPlan} onOpen={(item) => setSelectedId(item.id)} />
+                            <TaskCard key={task.id} task={task} canPlan={canEditPlan} onAddToPlan={addToPlan} onOpen={(item) => setSelectedId(item.id)} />
                           ))}
                           {board[status].length === 0 && (
                             <div className="station-empty"><Icon size={26} weight="duotone" />ไม่มีออเดอร์ที่นี่<br /><small>Station is clear</small></div>
@@ -487,7 +517,7 @@ function Kitchen({ onSignOut }) {
             stories={data.stories}
             taskIds={data.tasks.map((task) => task.id)}
             crew={crew}
-            defaultChef={currentUser !== "All" ? currentUser : ""}
+            defaultChef={isChef ? me.id : ""}
             onClose={() => setShowCreate(false)}
             onCreate={createTask}
           />
@@ -499,6 +529,23 @@ function Kitchen({ onSignOut }) {
             onSave={updateStatus}
             onEdit={(task) => { setSelectedId(null); setEditingId(task.id); }}
             onDelete={deleteTask}
+          />
+        )}
+        {showPin && (
+          <ChangePinModal
+            onClose={() => setShowPin(false)}
+            onSave={async (currentPin, newPin, showError) => {
+              try {
+                await api.changePin(currentPin, newPin);
+                setShowPin(false);
+                notify("เปลี่ยน PIN แล้ว · เครื่องอื่นที่ใช้ PIN เดิมจะต้องเข้าใหม่");
+                return true;
+              } catch (error) {
+                if (error?.isAuth) handleError(error);
+                else showError(error?.message || "เปลี่ยน PIN ไม่สำเร็จ");
+                return false;
+              }
+            }}
           />
         )}
         {editingId && tasksById[editingId] && (

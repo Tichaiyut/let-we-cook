@@ -116,8 +116,16 @@ function createKitchen() {
 
   const call = (body) => JSON.parse(context.doPost({ postData: { contents: JSON.stringify(body) } }).text);
   const login = (password = PASSWORD, clientId = "browser-a") => call({ action: "login", password, clientId });
-  return { context, sheets, properties, cache, call, login };
+  // Sets a chef's first PIN (with the team password) and returns their session token.
+  const chef = (personId, pin = PINS[personId]) => {
+    const result = call({ action: "setupPin", personId, teamPassword: PASSWORD, pin, clientId: `setup-${personId}` });
+    assert.equal(result.ok, true, result.error);
+    return result.token;
+  };
+  return { context, sheets, properties, cache, call, login, chef };
 }
+
+const PINS = { arparat: "4829", tichaiyut: "7361", chonlasit: "5093", sorawee: "2718" };
 
 const inTenDays = () => new Date(Date.now() + 10 * 86400000).toISOString().slice(0, 10);
 
@@ -156,11 +164,14 @@ test("every data action needs a valid session token", () => {
   assert.equal(data.ok, true);
   assert.equal(data.people.length, 5);
 
-  const [expires, nonce] = session.token.split(".");
-  assert.equal(call({ action: "bootstrap", token: `${expires}.${nonce}.forged` }).code, "AUTH");
-  assert.equal(call({ action: "bootstrap", token: `${Number(expires) + 999}.${nonce}.${session.token.split(".")[2]}` }).code, "AUTH");
+  assert.deepEqual(data.me, { kind: "team", id: "team", name: "Team" });
 
-  const expiredPayload = `1000.${nonce}`;
+  const [expires, who, version, nonce, signature0] = session.token.split(".");
+  assert.equal(call({ action: "bootstrap", token: `${expires}.${who}.${version}.${nonce}.forged` }).code, "AUTH");
+  assert.equal(call({ action: "bootstrap", token: `${Number(expires) + 999}.${who}.${version}.${nonce}.${signature0}` }).code, "AUTH");
+  assert.equal(call({ action: "bootstrap", token: `${expires}.sorawee.${version}.${nonce}.${signature0}` }).code, "AUTH", "cannot swap identity");
+
+  const expiredPayload = `1000.team.0.${nonce}`;
   const signature = createHmac("sha256", properties.get("TOKEN_SECRET")).update(expiredPayload).digest("base64url");
   assert.equal(call({ action: "bootstrap", token: `${expiredPayload}.${signature}` }).code, "AUTH");
 });
@@ -261,22 +272,32 @@ test("updates the station of a ticket", () => {
 });
 
 test("saves and reloads today's menu per chef and date", () => {
-  const { call, login } = createKitchen();
-  const { token } = login();
-  const save = (entries, personId = "sorawee", planDate = "2026-09-30") =>
-    call({ action: "saveDailyPlan", token, actor: personId, payload: { planDate, personId, entries } });
+  const { call, chef } = createKitchen();
+  const tokens = { sorawee: chef("sorawee"), chonlasit: chef("chonlasit") };
+  const save = (entries, personId = "sorawee", planDate = "2026-09-30", token = tokens[personId]) =>
+    call({ action: "saveDailyPlan", token, payload: { planDate, personId, entries } });
   const load = (personId = "sorawee", planDate = "2026-09-30") =>
-    call({ action: "getDailyPlan", token, payload: { planDate, personId } }).entries;
+    call({ action: "getDailyPlan", token: tokens.chonlasit, payload: { planDate, personId } }).entries;
 
   assert.deepEqual(load(), []);
   assert.equal(save([{ taskId: "IFM-PER-T0001", note: "finish chart" }, { taskId: "IFM-PER-B0001", note: "" }]).saved, 2);
-  assert.deepEqual(load(), [{ taskId: "IFM-PER-T0001", note: "finish chart" }, { taskId: "IFM-PER-B0001", note: "" }]);
+  assert.deepEqual(load(), [{ taskId: "IFM-PER-T0001", note: "finish chart" }, { taskId: "IFM-PER-B0001", note: "" }], "other chefs can read it");
   save([{ taskId: "IFM-PER-T0002", note: "replaced" }]);
   assert.deepEqual(load(), [{ taskId: "IFM-PER-T0002", note: "replaced" }]);
   save([{ taskId: "X", note: "other chef" }], "chonlasit");
   save([{ taskId: "Y", note: "tomorrow" }], "sorawee", "2026-10-01");
   assert.deepEqual(load(), [{ taskId: "IFM-PER-T0002", note: "replaced" }]);
-  assert.match(save([], "stranger").error, /Unknown chef/);
+  assert.match(save([], "stranger", "2026-09-30", tokens.sorawee).error, /Unknown chef/);
+});
+
+test("only the chef can change their own menu; the team login is read-only", () => {
+  const { call, login, chef } = createKitchen();
+  const sorawee = chef("sorawee");
+  const team = login().token;
+  const payload = { planDate: "2026-09-30", personId: "chonlasit", entries: [{ taskId: "A", note: "" }] };
+  assert.match(call({ action: "saveDailyPlan", token: sorawee, payload }).error, /เฉพาะเมนูวันนี้ของตัวเอง/);
+  assert.match(call({ action: "saveDailyPlan", token: team, payload }).error, /รหัสทีม/);
+  assert.equal(call({ action: "getDailyPlan", token: team, payload }).ok, true);
 });
 
 function seedTicket(call, token, overrides = {}) {
@@ -290,10 +311,10 @@ test("setup adds the trash columns to older sheets", () => {
 });
 
 test("deleting moves a ticket to the trash and restoring brings it back", () => {
-  const { call, login, sheets } = createKitchen();
-  const { token } = login();
+  const { call, chef, sheets } = createKitchen();
+  const token = chef("arparat");
   const ticket = seedTicket(call, token);
-  const deleted = call({ action: "deleteTask", token, actor: "arparat", payload: { id: ticket.id, reason: "duplicate" } });
+  const deleted = call({ action: "deleteTask", token, actor: "someone-else", payload: { id: ticket.id, reason: "duplicate" } });
   assert.equal(deleted.ok, true, deleted.error);
   assert.equal(deleted.task.deleted, true);
   assert.equal(deleted.task.deletedBy, "arparat");
@@ -348,8 +369,8 @@ test("edits every field of a ticket and keeps its ID within the same course", ()
 });
 
 test("moving to another course or type gives a new ID and carries references along", () => {
-  const { call, login, sheets } = createKitchen();
-  const { token } = login();
+  const { call, chef, sheets } = createKitchen();
+  const token = chef("sorawee");
   const ticket = seedTicket(call, token);
   call({ action: "createTask", token, payload: newOrder({ newEpic: null, epicCode: "IFM", newStory: { code: "DEN", name: "Daily Entry" }, title: "Other" }) });
   call({ action: "saveDailyPlan", token, payload: { planDate: "2026-09-30", personId: "sorawee", entries: [{ taskId: ticket.id, note: "keep me" }] } });
@@ -385,4 +406,83 @@ test("rejects invalid edits", () => {
   assert.match(edit({ id: "IFM-PER-T9999" }), /not found/);
   call({ action: "deleteTask", token, payload: { id: ticket.id } });
   assert.match(edit({}), /ถังขยะ/);
+});
+
+test("the roster shows who still needs to set a PIN", () => {
+  const { call, chef } = createKitchen();
+  chef("sorawee");
+  const roster = call({ action: "roster" });
+  assert.equal(roster.ok, true);
+  assert.deepEqual(roster.chefs.map((person) => [person.id, person.hasPin]), [
+    ["arparat", false], ["tichaiyut", false], ["chonlasit", false], ["sorawee", true],
+  ], "inactive people are not listed");
+  assert.equal(JSON.stringify(roster).includes("HASH"), false);
+});
+
+test("setting a first PIN needs the team password and a non-obvious PIN", () => {
+  const { call } = createKitchen();
+  const setup = (overrides) => call({ action: "setupPin", personId: "tichaiyut", teamPassword: PASSWORD, pin: "7361", clientId: "c1", ...overrides });
+  assert.match(setup({ pin: "123" }).error, /4 หลัก/);
+  assert.match(setup({ pin: "1234" }).error, /เดาง่าย/);
+  assert.match(setup({ pin: "0000" }).error, /เดาง่าย/);
+  assert.match(setup({ personId: "bank" }).error, /ไม่พบเชฟ/, "inactive people cannot sign up");
+  const wrong = setup({ teamPassword: "guess" });
+  assert.equal(wrong.code, "WRONG_PASSWORD");
+  const ok = setup({});
+  assert.equal(ok.ok, true, ok.error);
+  assert.deepEqual(ok.me, { kind: "chef", id: "tichaiyut", name: "Tichaiyut" });
+  assert.equal(setup({ pin: "5555" }).code, "PIN_ALREADY_SET");
+});
+
+test("chefs sign in with their PIN and act under their own name", () => {
+  const { call, chef, sheets } = createKitchen();
+  chef("chonlasit");
+  assert.equal(call({ action: "chefLogin", personId: "arparat", pin: "4829" }).code, "PIN_NOT_SET");
+  const wrong = call({ action: "chefLogin", personId: "chonlasit", pin: "1111" });
+  assert.equal(wrong.code, "WRONG_PASSWORD");
+  assert.equal(wrong.remaining, 4);
+  const session = call({ action: "chefLogin", personId: "Chonlasit", pin: PINS.chonlasit });
+  assert.equal(session.ok, true, session.error);
+  assert.equal(session.me.id, "chonlasit");
+  const created = call({ action: "createTask", token: session.token, actor: "sorawee", payload: newOrder() });
+  assert.equal(created.task.reporter, "chonlasit", "the actor comes from the session, not the request");
+  assert.equal(sheets["Activity Log"].data.at(-1)[2], "chonlasit");
+});
+
+test("five wrong PINs lock that chef everywhere, but not the others", () => {
+  const { call, chef, login } = createKitchen();
+  chef("sorawee");
+  chef("arparat");
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    assert.equal(call({ action: "chefLogin", personId: "sorawee", pin: "9999", clientId: `device-${attempt}` }).code, "WRONG_PASSWORD");
+  }
+  const locked = call({ action: "chefLogin", personId: "sorawee", pin: "9999", clientId: "device-9" });
+  assert.equal(locked.code, "LOCKED");
+  assert.equal(call({ action: "chefLogin", personId: "sorawee", pin: PINS.sorawee }).code, "LOCKED", "switching browsers does not help");
+  assert.equal(call({ action: "chefLogin", personId: "arparat", pin: PINS.arparat }).ok, true);
+  assert.equal(login().ok, true, "the team password still works as a backup");
+});
+
+test("changing a PIN signs out that chef's other sessions only", () => {
+  const { call, chef } = createKitchen();
+  const oldToken = chef("sorawee");
+  const other = chef("arparat");
+  assert.equal(call({ action: "changePin", token: oldToken, currentPin: "0001", newPin: "8642" }).code, "WRONG_PASSWORD");
+  assert.match(call({ action: "changePin", token: oldToken, currentPin: PINS.sorawee, newPin: "4444" }).error, /เดาง่าย/);
+  const changed = call({ action: "changePin", token: oldToken, currentPin: PINS.sorawee, newPin: "8642" });
+  assert.equal(changed.ok, true, changed.error);
+  assert.equal(call({ action: "bootstrap", token: oldToken }).code, "AUTH");
+  assert.equal(call({ action: "bootstrap", token: changed.token }).ok, true);
+  assert.equal(call({ action: "bootstrap", token: other }).ok, true);
+  assert.equal(call({ action: "chefLogin", personId: "sorawee", pin: "8642" }).ok, true);
+});
+
+test("the owner can reset a forgotten PIN", () => {
+  const { call, chef, context } = createKitchen();
+  const token = chef("sorawee");
+  context.clearPin_("sorawee");
+  assert.equal(call({ action: "bootstrap", token }).code, "AUTH");
+  assert.equal(call({ action: "chefLogin", personId: "sorawee", pin: PINS.sorawee }).code, "PIN_NOT_SET");
+  assert.equal(chef("sorawee", "3579").length > 0, true);
+  assert.equal(call({ action: "changePin", token: call({ action: "login", password: PASSWORD, clientId: "x" }).token, currentPin: "3579", newPin: "8642" }).error.includes("รหัสทีม"), true);
 });

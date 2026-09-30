@@ -600,6 +600,59 @@ h1, h2, h3, strong { font-weight: 600; }
 .door-setup { display: flex; align-items: center; justify-content: center; gap: 8px; }
 .door-card code { padding: 1px 5px; border-radius: 5px; background: var(--linen); }
 
+/* ---------- Who's cooking: chef picker, PIN, account menu ---------- */
+
+.chef-picker { margin-bottom: 14px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.chef-picker.is-loading { display: block; padding: 24px; color: var(--ink-mute); font-size: 13px; }
+.chef-picker button {
+  padding: 14px 8px 12px; border: 1px solid var(--line); border-radius: 16px; display: grid; justify-items: center; gap: 4px;
+  background: #fffefb; transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+}
+.chef-picker button:hover { border-color: var(--tomato); box-shadow: var(--shadow); transform: translateY(-2px); }
+.chef-picker b { margin-top: 4px; font-family: var(--font-display); font-size: 15px; font-weight: 500; }
+.chef-picker small { color: var(--ink-mute); font-size: 11.5px; }
+.door-link {
+  margin: 12px auto 0; padding: 4px 8px; border: 0; border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 6px;
+  color: var(--ink-soft); background: none; font-size: 12.5px; font-weight: 600;
+}
+.door-link:hover { color: var(--tomato-deep); background: var(--linen); }
+.door-card form > button.door-link { width: auto; height: auto; margin-top: 12px; color: var(--ink-soft); background: none; box-shadow: none; font-family: var(--font-body); font-size: 12.5px; }
+.door-card form > button.door-link:hover { color: var(--tomato-deep); background: var(--linen); }
+.door-who { margin-bottom: 16px; padding: 12px; border-radius: 14px; display: flex; align-items: center; gap: 12px; background: var(--linen); text-align: left; }
+.door-who b { display: block; font-family: var(--font-display); font-size: 17px; font-weight: 500; }
+.door-who small { display: block; color: var(--ink-mute); font-size: 12px; }
+.door-hint { margin: 8px 0 0; color: var(--ink-mute); font-size: 11.5px; }
+.door-field { display: block; margin-bottom: 12px; }
+.pin-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.door-card .pin-field > span, .pin-field > span { margin-bottom: 6px; display: block; color: var(--ink-soft); font-size: 12px; font-weight: 700; }
+.door-card .pin-field > .pin-boxes, .pin-boxes {
+  position: relative; height: auto; padding: 0; border: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; background: none;
+}
+.pin-boxes i { height: 52px; border: 1px solid var(--line-strong); border-radius: 12px; display: grid; place-items: center; background: #fffefb; transition: border-color .12s ease, box-shadow .12s ease; }
+.pin-boxes i.is-filled::after { content: ""; width: 12px; height: 12px; border-radius: 50%; background: var(--ink); }
+.pin-boxes:focus-within i.is-next { border-color: var(--tomato); box-shadow: 0 0 0 3px rgb(216 87 42 / 20%); }
+.pin-boxes input { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; opacity: 0; cursor: pointer; font-size: 16px; }
+.door-card .pin-field > .pin-boxes:focus-within { border: 0; outline: 0; }
+.pin-modal { width: min(460px, 100%); }
+.pin-modal .pin-field { display: block; }
+
+.me-menu { position: relative; }
+.me-chip {
+  height: 44px; padding: 0 12px 0 6px; border: 1px solid rgb(255 255 255 / 16%); border-radius: 13px; display: flex; align-items: center; gap: 9px;
+  color: var(--chalk-text); background: rgb(255 255 255 / 6%); text-align: left;
+}
+.me-chip:hover { background: rgb(255 255 255 / 12%); }
+.me-chip b { display: block; font-size: 13px; line-height: 1.2; }
+.me-chip small { display: block; color: var(--chalk-mute); font-size: 10.5px; }
+.team-badge { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: var(--ink); background: #f3c96c; }
+.me-dropdown {
+  position: absolute; z-index: 40; top: calc(100% + 8px); right: 0; min-width: 210px; padding: 6px; border: 1px solid var(--line); border-radius: 14px;
+  display: grid; background: var(--paper); box-shadow: var(--shadow-lg); animation: rise .12s ease;
+}
+.me-dropdown button { height: 40px; padding: 0 12px; border: 0; border-radius: 9px; display: flex; align-items: center; gap: 9px; color: var(--ink); background: none; font-size: 13.5px; text-align: left; }
+.me-dropdown button:hover { background: var(--linen); }
+.me-dropdown span { padding: 8px 12px; color: var(--ink-mute); font-size: 12px; }
+
 /* ---------- Responsive ---------- */
 
 @media (hover: none) {
@@ -613,6 +666,7 @@ h1, h2, h3, strong { font-weight: 600; }
 
 @media (max-width: 1180px) {
   .topbar-date { display: none; }
+  .me-chip small { display: none; }
   .page-nav { margin-left: auto; }
   .work-area { height: auto; grid-template-columns: 1fr; }
   .today-board { max-height: 560px; }

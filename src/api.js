@@ -57,9 +57,17 @@ function clientId() {
   return id;
 }
 
+// A session is { token, expiresAt, me: { kind: "chef" | "team", id, name } }.
 function readSession() {
   const session = readJson(SESSION_KEY);
-  return session?.token && session.expiresAt > Date.now() ? session : null;
+  return session?.token && session.me && session.expiresAt > Date.now() ? session : null;
+}
+
+function storeSession(result) {
+  // Apps Script older than API 2.2 only knows the team login and sends no `me`.
+  const me = result.me || { kind: "team", id: "team", name: "Team" };
+  writeJson(SESSION_KEY, { token: result.token, expiresAt: result.expiresAt, me });
+  return { ...result, me };
 }
 
 // Apps Script only answers CORS for "simple" requests, so everything is a
@@ -86,11 +94,11 @@ async function call(action, body = {}) {
 }
 
 const liveKitchen = {
-  async login(password) {
-    const result = await call("login", { password, clientId: clientId() });
-    writeJson(SESSION_KEY, { token: result.token, expiresAt: result.expiresAt });
-    return result;
-  },
+  roster: () => call("roster"),
+  teamLogin: async (password) => storeSession(await call("login", { password, clientId: clientId() })),
+  chefLogin: async (personId, pin) => storeSession(await call("chefLogin", { personId, pin })),
+  setupPin: async (personId, teamPassword, pin) => storeSession(await call("setupPin", { personId, teamPassword, pin, clientId: clientId() })),
+  changePin: async (currentPin, newPin) => storeSession(await call("changePin", { currentPin, newPin })),
   bootstrap: () => call("bootstrap"),
   getDailyPlan: (planDate, personId) => call("getDailyPlan", { payload: { planDate, personId } }),
   saveDailyPlan: (planDate, personId, entries, actor) => call("saveDailyPlan", { actor, payload: { planDate, personId, entries } }),
@@ -101,9 +109,12 @@ const liveKitchen = {
   restoreTask: (id, actor) => call("restoreTask", { actor, payload: { id } }),
 };
 
+const kitchen = MODE === "sample" ? createSampleKitchen(ApiError) : liveKitchen;
+
 export const api = {
   mode: MODE,
   hasSession: () => MODE === "sample" || Boolean(readSession()),
+  me: () => (MODE === "sample" ? kitchen.sampleMe : readSession()?.me || null),
   logout: () => removeKey(SESSION_KEY),
-  ...(MODE === "sample" ? createSampleKitchen(ApiError) : liveKitchen),
+  ...kitchen,
 };
