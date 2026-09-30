@@ -68,6 +68,16 @@ const DEPLOYED_API_URL = "https://script.google.com/macros/s/xxxxxxxx/exec";
 บน GitHub ไปที่ **Settings → Pages → Build and deployment → Source: GitHub Actions**
 ทุกครั้งที่ push ไป `main` ระบบจะรันเทสต์ build แล้ว deploy ให้เอง ลิงก์เว็บคือ **https://tichaiyut.github.io/let-we-cook/**
 
+## แก้ไขและลบงาน
+
+- **แก้ไข:** กดการ์ด → **แก้ไข** เปลี่ยนได้ทุกอย่าง ทั้งชื่อ รายละเอียด ประเภท Course เชฟ Station และวันส่ง
+  - ถ้า**ย้าย Course หรือเปลี่ยน Task ↔ Bug** งานจะได้ **ID ใหม่** เช่น `IFM-PER-T0003 → IFM-DEN-B0001` ผู้รับผิดชอบและเมนูวันนี้ที่อ้างถึงงานนี้จะย้ายตามให้เอง ส่วน ID เดิมบันทึกไว้ใน Activity Log
+- **ลบ (ทิ้งจาน):** กดการ์ด → **ทิ้งจาน** ใส่เหตุผลได้ถ้าต้องการ งานจะหายจากบอร์ดไปอยู่แท็บ **Bin**
+  - แถวยังอยู่ใน Sheet โดยคอลัมน์ `Deleted` = TRUE พร้อม `DeletedAt` / `DeletedBy` (ระบบเพิ่มคอลัมน์ให้เอง)
+  - กด **Undo** ที่แถบแจ้งเตือนได้ภายใน 10 วินาที หรือไปกด **กู้คืน** ในแท็บ Bin เมื่อไหร่ก็ได้
+- **ID ไม่ถูกใช้ซ้ำ** ถึงงานจะถูกทิ้ง ถูกย้าย หรือเจ้าของลบแถวออกจาก Sheet เอง เพราะระบบเช็คจาก Activity Log ด้วย
+- ถ้าจำเป็นต้องลบถาวรจริง ๆ ให้เจ้าของชีทลบแถวเองในแท็บ Work Items และ Task Assignees
+
 ## แก้ Code.gs ภายหลัง
 
 วางโค้ดใหม่ใน Apps Script แล้วไปที่ **Deploy → Manage deployments → ✏️ Edit → Version: New version → Deploy**

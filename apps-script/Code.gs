@@ -8,7 +8,7 @@
  * key that signs login sessions are stored in Script Properties.
  */
 
-const API_VERSION = "2.0";
+const API_VERSION = "2.1";
 const TIMEZONE = "Asia/Bangkok";
 const SHEETS = {
   PEOPLE: "People",
@@ -22,6 +22,7 @@ const SHEETS = {
 const STATUSES = ["Backlog", "To Do", "In Progress", "Done"];
 const MAX_ASSIGNEES = 4;
 const MAX_PLAN_ENTRIES = 50;
+const DELETE_COLUMNS = ["Deleted", "DeletedAt", "DeletedBy"];
 
 const SESSION_SECONDS = 2 * 60 * 60;
 const CLIENT_MAX_FAILURES = 5;
@@ -54,6 +55,7 @@ function setupLetWeCook() {
   props.setProperty("SPREADSHEET_ID", spreadsheet.getId());
   if (!props.getProperty("TOKEN_SECRET")) props.setProperty("TOKEN_SECRET", randomSecret_());
   props.deleteProperty("API_SHARED_SECRET");
+  ensureColumns_(spreadsheet.getSheetByName(SHEETS.ITEMS), DELETE_COLUMNS);
   return notify_("ตั้งค่าเรียบร้อย ✅\n\nขั้นต่อไป: เมนู 🍳 Let We Cook → 2) ตั้ง / เปลี่ยนรหัสผ่านทีม");
 }
 
@@ -144,6 +146,9 @@ function route_(body) {
   if (action === "saveDailyPlan") return { ok: true, saved: saveDailyPlan_(payload, actor) };
   if (action === "createTask") return Object.assign({ ok: true }, createTask_(payload, actor));
   if (action === "updateStatus") return { ok: true, task: updateStatus_(payload, actor) };
+  if (action === "updateTask") return Object.assign({ ok: true }, updateTask_(payload, actor));
+  if (action === "deleteTask") return { ok: true, task: deleteTask_(payload, actor) };
+  if (action === "restoreTask") return { ok: true, task: restoreTask_(payload, actor) };
   return { ok: false, error: "Unknown action" };
 }
 
@@ -375,6 +380,108 @@ function log_(actor, workItemId, action, fromValue, toValue, detail) {
 }
 
 // ---------------------------------------------------------------------------
+// Work item rows
+// ---------------------------------------------------------------------------
+
+// Adds any missing header columns at the end of the sheet (e.g. the trash
+// columns on sheets created before soft delete existed).
+function ensureColumns_(sheet, names) {
+  const lastColumn = sheet.getLastColumn();
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(String);
+  const missing = names.filter(name => headers.indexOf(name) === -1);
+  if (missing.length) {
+    const room = sheet.getMaxColumns() - lastColumn;
+    if (room < missing.length) sheet.insertColumnsAfter(sheet.getMaxColumns(), missing.length - room);
+    sheet.getRange(1, lastColumn + 1, 1, missing.length).setValues([missing]);
+  }
+  return headers.concat(missing);
+}
+
+function findItem_(sheet, id) {
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(String);
+  const idColumn = headers.indexOf("WorkItemID");
+  const index = values.findIndex((row, rowIndex) => rowIndex > 0 && String(row[idColumn]) === id);
+  if (index < 1) throw new Error("Work item not found");
+  const record = {};
+  headers.forEach((header, column) => { record[header] = value_(values[index][column]); });
+  return { rowNumber: index + 1, headers: headers, record: record };
+}
+
+function setCells_(sheet, found, changes) {
+  Object.keys(changes).forEach(name => {
+    const column = found.headers.indexOf(name);
+    if (column !== -1) sheet.getRange(found.rowNumber, column + 1).setValue(safeCell_(changes[name]));
+  });
+}
+
+// Next free number for an ID prefix such as "IFM-PDA-T". IDs that ever
+// existed (including moved or hard-deleted items, via the Activity Log) are
+// never handed out again.
+function nextItemNumber_(prefix) {
+  const pattern = new RegExp("^" + prefix + "(\\d{4})$");
+  const used = rows_(SHEETS.ITEMS).map(row => row.WorkItemID)
+    .concat(...rows_(SHEETS.ACTIVITY).map(row => [row.WorkItemID, row.FromValue, row.ToValue]));
+  return used.reduce((max, value) => {
+    const match = String(value || "").match(pattern);
+    return match ? Math.max(max, Number(match[1])) : max;
+  }, 0) + 1;
+}
+
+function activeAssignees_(values) {
+  const active = rows_(SHEETS.PEOPLE).filter(row => isTrue_(row.Active)).map(row => String(row.PersonID));
+  const assignees = [];
+  (Array.isArray(values) ? values : []).forEach(value => {
+    const personId = cleanText_(value, 80);
+    if (active.indexOf(personId) !== -1 && assignees.indexOf(personId) === -1) assignees.push(personId);
+  });
+  if (!assignees.length) throw new Error("Choose at least one chef");
+  if (assignees.length > MAX_ASSIGNEES) throw new Error("A work item can have at most " + MAX_ASSIGNEES + " chefs");
+  return assignees;
+}
+
+function assigneesOf_(workItemId) {
+  return rows_(SHEETS.ASSIGNEES)
+    .filter(row => String(row.WorkItemID) === workItemId)
+    .sort((a, b) => Number(a.AssigneeOrder || 99) - Number(b.AssigneeOrder || 99))
+    .map(row => String(row.PersonID));
+}
+
+function replaceAssignees_(oldId, newId, assignees, actor) {
+  const sheet = sheet_(SHEETS.ASSIGNEES);
+  const values = sheet.getDataRange().getValues();
+  const idColumn = values[0].map(String).indexOf("WorkItemID");
+  for (let row = values.length - 1; row >= 1; row -= 1) {
+    if (String(values[row][idColumn]) === oldId) sheet.deleteRow(row + 1);
+  }
+  const now = new Date();
+  assignees.forEach((personId, index) => append_(SHEETS.ASSIGNEES, {
+    WorkItemID: newId, PersonID: personId, AssigneeOrder: index + 1, AddedAt: now, AddedBy: actor,
+  }));
+}
+
+function renamePlanReferences_(oldId, newId) {
+  const sheet = sheet_(SHEETS.PLANS);
+  const values = sheet.getDataRange().getValues();
+  const idColumn = values[0].map(String).indexOf("WorkItemID");
+  values.forEach((row, index) => {
+    if (index > 0 && String(row[idColumn]) === oldId) sheet.getRange(index + 1, idColumn + 1).setValue(newId);
+  });
+}
+
+function validDueDate_(value) {
+  const dueDate = cleanText_(value, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) throw new Error("Due date is required");
+  return dueDate;
+}
+
+function validTitle_(value) {
+  const title = cleanText_(value, 240);
+  if (!title) throw new Error("Title is required");
+  return title;
+}
+
+// ---------------------------------------------------------------------------
 // Data
 // ---------------------------------------------------------------------------
 
@@ -413,7 +520,7 @@ function buildBootstrap_() {
   const storyById = {};
   stories.forEach(story => { storyById[story.id] = story; });
 
-  const tasks = rows_(SHEETS.ITEMS).map(row => {
+  const items = rows_(SHEETS.ITEMS).map(row => {
     const id = String(row.WorkItemID || "");
     const epic = epicByCode[String(row.EpicCode || "")] || {};
     const story = storyById[String(row.StoryID || "")] || {};
@@ -438,10 +545,25 @@ function buildBootstrap_() {
       progress: Number(row.Progress || 0),
       blocker: isTrue_(row.Blocker),
       tags: String(row.Tags || ""),
+      deleted: isTrue_(row.Deleted),
+      deletedAt: String(row.DeletedAt || ""),
+      deletedBy: String(row.DeletedBy || ""),
     };
   }).filter(task => task.id);
 
-  return { people: people, epics: epics, stories: stories, tasks: tasks, generatedAt: new Date().toISOString() };
+  return {
+    people: people,
+    epics: epics,
+    stories: stories,
+    tasks: items.filter(task => !task.deleted),
+    trash: items.filter(task => task.deleted),
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function findTask_(id) {
+  const data = buildBootstrap_();
+  return data.tasks.concat(data.trash).find(task => task.id === id);
 }
 
 function createTask_(payload, actor) {
@@ -449,19 +571,9 @@ function createTask_(payload, actor) {
     const now = new Date();
     const epics = rows_(SHEETS.EPICS);
     const stories = rows_(SHEETS.STORIES);
-    const activePeople = rows_(SHEETS.PEOPLE).filter(row => isTrue_(row.Active)).map(row => String(row.PersonID));
-
-    const title = cleanText_(payload.title, 240);
-    const dueDate = cleanText_(payload.dueDate, 10);
-    if (!title) throw new Error("Title is required");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) throw new Error("Due date is required");
-    const assignees = [];
-    (Array.isArray(payload.assignees) ? payload.assignees : []).forEach(value => {
-      const personId = cleanText_(value, 80);
-      if (activePeople.indexOf(personId) !== -1 && assignees.indexOf(personId) === -1) assignees.push(personId);
-    });
-    if (!assignees.length) throw new Error("Choose at least one chef");
-    if (assignees.length > MAX_ASSIGNEES) throw new Error("A work item can have at most " + MAX_ASSIGNEES + " chefs");
+    const title = validTitle_(payload.title);
+    const dueDate = validDueDate_(payload.dueDate);
+    const assignees = activeAssignees_(payload.assignees);
 
     let epicCode;
     if (payload.newEpic) {
@@ -504,12 +616,7 @@ function createTask_(payload, actor) {
     const issueType = String(payload.issueType).toLowerCase() === "bug" ? "Bug" : "Task";
     const typeCode = issueType === "Bug" ? "B" : "T";
     const prefix = epicCode + "-" + storyCode + "-" + typeCode;
-    const pattern = new RegExp("^" + prefix + "(\\d{4})$");
-    const nextNumber = rows_(SHEETS.ITEMS).reduce((max, row) => {
-      const match = String(row.WorkItemID || "").match(pattern);
-      return match ? Math.max(max, Number(match[1])) : max;
-    }, 0) + 1;
-    const itemCode = typeCode + String(nextNumber).padStart(4, "0");
+    const itemCode = typeCode + String(nextItemNumber_(prefix)).padStart(4, "0");
     const workItemId = epicCode + "-" + storyCode + "-" + itemCode;
     const status = STATUSES.indexOf(payload.status) !== -1 ? payload.status : "To Do";
 
@@ -549,23 +656,114 @@ function updateStatus_(payload, actor) {
   if (STATUSES.indexOf(status) === -1) throw new Error("Invalid status");
   return withLock_(() => {
     const sheet = sheet_(SHEETS.ITEMS);
-    const values = sheet.getDataRange().getValues();
-    const headers = values[0].map(String);
-    const column = name => headers.indexOf(name);
-    const rowIndex = values.findIndex((row, index) => index > 0 && String(row[column("WorkItemID")]) === id);
-    if (rowIndex < 1) throw new Error("Work item not found");
-    const row = values[rowIndex];
-    const oldStatus = String(row[column("Status")] || "");
-    const set = (name, value) => {
-      if (column(name) !== -1) sheet.getRange(rowIndex + 1, column(name) + 1).setValue(safeCell_(value));
-    };
-    set("Status", status);
-    set("Priority", computePriority_(value_(row[column("DueDate")]), status));
-    if (status === "Done") set("Progress", 100);
-    set("UpdatedAt", new Date());
-    set("UpdatedBy", actor);
+    const found = findItem_(sheet, id);
+    if (isTrue_(found.record.Deleted)) throw new Error("งานนี้อยู่ในถังขยะ กู้คืนก่อนเปลี่ยนสถานะ");
+    const oldStatus = String(found.record.Status || "");
+    const changes = { Status: status, Priority: computePriority_(found.record.DueDate, status), UpdatedAt: new Date(), UpdatedBy: actor };
+    if (status === "Done") changes.Progress = 100;
+    setCells_(sheet, found, changes);
     log_(actor, id, "Status changed", oldStatus, status, "");
-    return buildBootstrap_().tasks.find(task => task.id === id);
+    return findTask_(id);
+  });
+}
+
+// Edits every field of a ticket. Moving it to another course or switching
+// Task ↔ Bug gives it a new ID (the old one is kept in the Activity Log and
+// is never reused); assignees and today's-menu entries follow the new ID.
+function updateTask_(payload, actor) {
+  const id = cleanText_(payload.id, 40);
+  return withLock_(() => {
+    const sheet = sheet_(SHEETS.ITEMS);
+    const found = findItem_(sheet, id);
+    const row = found.record;
+    if (isTrue_(row.Deleted)) throw new Error("งานนี้อยู่ในถังขยะ กู้คืนก่อนแก้ไข");
+
+    const title = validTitle_(payload.title);
+    const description = cleanText_(payload.description, 5000);
+    const dueDate = validDueDate_(payload.dueDate);
+    const assignees = activeAssignees_(payload.assignees);
+    const status = STATUSES.indexOf(payload.status) !== -1 ? payload.status : String(row.Status || "To Do");
+    const issueType = String(payload.issueType).toLowerCase() === "bug" ? "Bug" : "Task";
+    const storyId = cleanText_(payload.storyId, 20).toUpperCase();
+    const story = rows_(SHEETS.STORIES).find(item => String(item.StoryID).toUpperCase() === storyId);
+    if (!story) throw new Error("Choose a valid course");
+    const epicCode = String(story.EpicCode).toUpperCase();
+    const storyCode = cleanCode_(story.StoryCode, "Course");
+    const typeCode = issueType === "Bug" ? "B" : "T";
+    const prefix = epicCode + "-" + storyCode + "-" + typeCode;
+
+    let newId = id;
+    let itemCode = String(row.ItemCode || "");
+    if (!new RegExp("^" + prefix + "\\d{4}$").test(id)) {
+      itemCode = typeCode + String(nextItemNumber_(prefix)).padStart(4, "0");
+      newId = epicCode + "-" + storyCode + "-" + itemCode;
+    }
+
+    const oldAssignees = assigneesOf_(id);
+    const changed = [];
+    if (title !== String(row.Title || "")) changed.push("title");
+    if (description !== String(row.Description || "")) changed.push("description");
+    if (dueDate !== String(row.DueDate || "").slice(0, 10)) changed.push("due date");
+    if (status !== String(row.Status || "")) changed.push("status");
+    if (issueType !== String(row.IssueType || "Task")) changed.push("type");
+    if (storyId !== String(row.StoryID || "")) changed.push("course");
+    if (assignees.join(",") !== oldAssignees.join(",")) changed.push("chefs");
+
+    const now = new Date();
+    const changes = {
+      WorkItemID: newId,
+      EpicCode: epicCode,
+      StoryID: storyId,
+      ItemCode: itemCode,
+      IssueType: issueType,
+      Title: title,
+      Description: description,
+      Status: status,
+      Priority: computePriority_(dueDate, status),
+      DueDate: dueDate,
+      AssigneeSummary: assignees.join(", "),
+      UpdatedAt: now,
+      UpdatedBy: actor,
+    };
+    if (status === "Done") changes.Progress = 100;
+    setCells_(sheet, found, changes);
+    if (newId !== id || changed.indexOf("chefs") !== -1) replaceAssignees_(id, newId, assignees, actor);
+    if (newId !== id) {
+      renamePlanReferences_(id, newId);
+      log_(actor, newId, "Moved", id, newId, "");
+    }
+    log_(actor, newId, "Edited", "", "", changed.join(", ") || "no changes");
+    return { task: findTask_(newId), previousId: newId !== id ? id : "" };
+  });
+}
+
+// Soft delete: the row stays in the sheet with Deleted = TRUE so it can be restored.
+function deleteTask_(payload, actor) {
+  const id = cleanText_(payload.id, 40);
+  const reason = cleanText_(payload.reason, 300);
+  return withLock_(() => {
+    const sheet = sheet_(SHEETS.ITEMS);
+    ensureColumns_(sheet, DELETE_COLUMNS);
+    const found = findItem_(sheet, id);
+    if (isTrue_(found.record.Deleted)) throw new Error("งานนี้อยู่ในถังขยะแล้ว");
+    const now = new Date();
+    setCells_(sheet, found, { Deleted: true, DeletedAt: now, DeletedBy: actor, UpdatedAt: now, UpdatedBy: actor });
+    log_(actor, id, "Deleted", String(found.record.Status || ""), "Trash", reason);
+    return findTask_(id);
+  });
+}
+
+function restoreTask_(payload, actor) {
+  const id = cleanText_(payload.id, 40);
+  return withLock_(() => {
+    const sheet = sheet_(SHEETS.ITEMS);
+    ensureColumns_(sheet, DELETE_COLUMNS);
+    const found = findItem_(sheet, id);
+    if (!isTrue_(found.record.Deleted)) throw new Error("งานนี้ไม่ได้อยู่ในถังขยะ");
+    const now = new Date();
+    setCells_(sheet, found, { Deleted: false, DeletedAt: "", DeletedBy: "", UpdatedAt: now, UpdatedBy: actor });
+    log_(actor, id, "Restored", "Trash", String(found.record.Status || ""), "");
+    return findTask_(id);
   });
 }
 

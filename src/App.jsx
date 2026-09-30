@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowClockwise, BowlSteam, CalendarBlank, ChefHat, ClipboardText, CookingPot, Fire, ForkKnife,
-  Info, Knife, Plus, SignOut, Sparkle, Timer, UsersThree, WarningCircle,
+  Info, Knife, Plus, SignOut, Sparkle, Timer, Trash, UsersThree, WarningCircle,
 } from "@phosphor-icons/react";
 import { api, MODE } from "./api.js";
 import { daysUntil, formatLongDate, isoDate, sortByDueDateOldestFirst } from "./lib/dates.js";
 import { ALL_STATUSES, BOARD_STATUSES, PRIORITIES, STATIONS, normalizeTask } from "./lib/kitchen.js";
 import { sortCrew } from "./team.js";
 import { BacklogTable } from "./components/BacklogTable.jsx";
+import { BinTable } from "./components/BinTable.jsx";
+import { EditModal } from "./components/EditModal.jsx";
 import { CreateModal } from "./components/CreateModal.jsx";
 import { CrewPage } from "./components/CrewPage.jsx";
 import { CrewContext, Filter } from "./components/common.jsx";
@@ -43,6 +45,7 @@ function toKitchenData(result) {
   const now = new Date();
   return {
     tasks: (result.tasks || []).map((task) => normalizeTask(task, now)).filter((task) => task.id),
+    trash: (result.trash || []).map((task) => normalizeTask(task, now)).filter((task) => task.id),
     people: (result.people || []).map((person) => ({ ...person, id: String(person.id).toLowerCase() })),
     epics: result.epics || [],
     stories: result.stories || [],
@@ -50,7 +53,7 @@ function toKitchenData(result) {
 }
 
 function Kitchen({ onSignOut }) {
-  const [data, setData] = useState({ tasks: [], people: [], epics: [], stories: [] });
+  const [data, setData] = useState({ tasks: [], trash: [], people: [], epics: [], stories: [] });
   const [loadState, setLoadState] = useState("loading");
   const [loadError, setLoadError] = useState("");
   const [page, setPage] = useState("kitchen");
@@ -61,13 +64,14 @@ function Kitchen({ onSignOut }) {
   const [plan, setPlan] = useState({ entries: [], loading: false, saving: false, dirty: false });
   const [showCreate, setShowCreate] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
+  const [editingId, setEditingId] = useState(null);
   const [toast, setToast] = useState(null);
   const [quarter, setQuarter] = useState(() => {
     const now = new Date();
     return { year: now.getFullYear(), index: Math.floor(now.getMonth() / 3) };
   });
 
-  const notify = useCallback((message, tone = "success") => setToast({ message, tone, at: Date.now() }), []);
+  const notify = useCallback((message, tone = "success", action = null) => setToast({ message, tone, action, at: Date.now() }), []);
 
   const handleError = useCallback((error) => {
     if (error?.isAuth) {
@@ -96,7 +100,7 @@ function Kitchen({ onSignOut }) {
 
   useEffect(() => {
     if (!toast) return undefined;
-    const timer = window.setTimeout(() => setToast(null), toast.tone === "error" ? 5200 : 2600);
+    const timer = window.setTimeout(() => setToast(null), toast.action ? 10000 : toast.tone === "error" ? 5200 : 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
 
@@ -105,6 +109,7 @@ function Kitchen({ onSignOut }) {
       if (event.key !== "Escape") return;
       setShowCreate(false);
       setSelectedId(null);
+      setEditingId(null);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -173,7 +178,8 @@ function Kitchen({ onSignOut }) {
     };
   }, [data.tasks]);
 
-  const planEntries = plan.entries.map((entry) => ({ ...entry, task: tasksById[entry.taskId] || null }));
+  const binnedIds = useMemo(() => new Set(data.trash.map((task) => task.id)), [data.trash]);
+  const planEntries = plan.entries.map((entry) => ({ ...entry, task: tasksById[entry.taskId] || null, binned: binnedIds.has(entry.taskId) }));
   const selectedTask = selectedId ? tasksById[selectedId] : null;
   const actor = currentUser !== "All" ? currentUser : "team";
 
@@ -244,6 +250,58 @@ function Kitchen({ onSignOut }) {
     } catch (error) {
       if (error?.isAuth) handleError(error);
       else showFormError(error?.message || "สร้างงานไม่สำเร็จ");
+      return false;
+    }
+  }
+
+  async function editTask(payload, showFormError) {
+    try {
+      const result = await api.updateTask(payload, actor);
+      const task = normalizeTask(result.task);
+      const previousId = result.previousId || "";
+      setData((current) => ({ ...current, tasks: current.tasks.map((item) => (item.id === payload.id ? task : item)) }));
+      if (previousId) {
+        setPlan((current) => ({ ...current, entries: current.entries.map((entry) => (entry.taskId === previousId ? { ...entry, taskId: task.id } : entry)) }));
+      }
+      setEditingId(null);
+      notify(previousId ? `บันทึกแล้ว · ${previousId} → ${task.id}` : `บันทึกการแก้ไข ${task.id}`);
+      return true;
+    } catch (error) {
+      if (error?.isAuth) handleError(error);
+      else showFormError(error?.message || "แก้ไขไม่สำเร็จ");
+      return false;
+    }
+  }
+
+  async function restoreTask(task) {
+    try {
+      const result = await api.restoreTask(task.id, actor);
+      const restored = normalizeTask(result.task);
+      setData((current) => ({
+        ...current,
+        trash: current.trash.filter((item) => item.id !== task.id),
+        tasks: [restored, ...current.tasks.filter((item) => item.id !== task.id)],
+      }));
+      notify(`กู้คืน ${task.id} กลับขึ้นบอร์ดแล้ว`);
+    } catch (error) {
+      handleError(error);
+    }
+  }
+
+  async function deleteTask(task, reason) {
+    try {
+      const result = await api.deleteTask(task.id, reason, actor);
+      const binned = normalizeTask(result.task);
+      setData((current) => ({
+        ...current,
+        tasks: current.tasks.filter((item) => item.id !== task.id),
+        trash: [binned, ...current.trash.filter((item) => item.id !== task.id)],
+      }));
+      setSelectedId(null);
+      notify(`ทิ้ง ${task.id} ลงถังขยะแล้ว`, "success", { label: "Undo", run: () => restoreTask(task) });
+      return true;
+    } catch (error) {
+      handleError(error);
       return false;
     }
   }
@@ -362,6 +420,9 @@ function Kitchen({ onSignOut }) {
               <button type="button" className={tab === "pantry" ? "active" : ""} onClick={() => setTab("pantry")}>
                 Pantry <span>{pantry.length}</span>
               </button>
+              <button type="button" className={tab === "bin" ? "active" : ""} onClick={() => setTab("bin")}>
+                <Trash size={15} weight="duotone" /> Bin <span>{data.trash.length}</span>
+              </button>
             </nav>
 
             {tab === "board" ? (
@@ -407,8 +468,10 @@ function Kitchen({ onSignOut }) {
                   })}
                 </section>
               </div>
-            ) : (
+            ) : tab === "pantry" ? (
               <BacklogTable tasks={pantry} onOpen={(task) => setSelectedId(task.id)} />
+            ) : (
+              <BinTable tasks={data.trash} onRestore={restoreTask} />
             )}
 
             <footer className="page-note">
@@ -429,8 +492,33 @@ function Kitchen({ onSignOut }) {
             onCreate={createTask}
           />
         )}
-        {selectedTask && <TaskDetailModal task={selectedTask} onClose={() => setSelectedId(null)} onSave={updateStatus} />}
-        {toast && <div className={`toast ${toast.tone === "error" ? "is-error" : ""}`} role="status" key={toast.at}>{toast.message}</div>}
+        {selectedTask && (
+          <TaskDetailModal
+            task={selectedTask}
+            onClose={() => setSelectedId(null)}
+            onSave={updateStatus}
+            onEdit={(task) => { setSelectedId(null); setEditingId(task.id); }}
+            onDelete={deleteTask}
+          />
+        )}
+        {editingId && tasksById[editingId] && (
+          <EditModal
+            task={tasksById[editingId]}
+            epics={data.epics}
+            stories={data.stories}
+            crew={crew}
+            onClose={() => setEditingId(null)}
+            onSave={editTask}
+          />
+        )}
+        {toast && (
+          <div className={`toast ${toast.tone === "error" ? "is-error" : ""}`} role="status" key={toast.at}>
+            {toast.message}
+            {toast.action && (
+              <button type="button" onClick={() => { setToast(null); toast.action.run(); }}>{toast.action.label}</button>
+            )}
+          </div>
+        )}
       </main>
     </CrewContext.Provider>
   );

@@ -60,6 +60,9 @@ export function normalizeTask(task, now = new Date()) {
     createdDate: String(task.createdDate || ""),
     dueDate: String(task.dueDate || ""),
     priority: priorityFor(task.dueDate, status, now),
+    deleted: Boolean(task.deleted),
+    deletedAt: String(task.deletedAt || ""),
+    deletedBy: String(task.deletedBy || ""),
   };
   normalized.color = menuColor(normalized);
   return normalized;

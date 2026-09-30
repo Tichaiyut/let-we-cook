@@ -13,6 +13,11 @@ Team task tracker for the 4-person TechFeed team. React 19 + Vite static site on
 - Crew: Arparat = Saint - Chan (Data Provider), Tichaiyut = Topu - Kun (Data Scientist), Chonlasit = Bon - Kun (AI Engineer), Sorawee = Ing - Kun (Web Developer). **Never use real face photos** — the repo is public. Character art is configured in `src/team.js`.
 - Former members and "Dev Team" are not shown. Only `Active = TRUE` people from the People sheet appear.
 - Old data from the original "Tech Feed Development" sheet was intentionally **not** migrated; the new sheet started empty.
+- Menu / Course codes are suggested automatically from the name (`src/lib/codes.js`) and stay editable.
+- **Delete is soft** ("ทิ้งจาน" → Bin tab): `Deleted`/`DeletedAt`/`DeletedBy` columns on Work Items, added automatically by `ensureColumns_`. Undo toast + restore from the Bin. No hard delete in the UI.
+- **IDs are never reused.** `nextItemNumber_` scans Work Items plus the Activity Log (WorkItemID/FromValue/ToValue).
+- Editing can change everything; changing course or Task↔Bug re-IDs the ticket and moves its Task Assignees and Daily Plans references (logged as "Moved").
+- Never ask the user to edit sheet headers by hand; Code.gs reads columns by header name.
 
 ## Auth model (in Code.gs)
 

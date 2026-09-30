@@ -424,6 +424,30 @@ h1, h2, h3, strong { font-weight: 600; }
 .recipe-grid b { color: var(--ink); font-size: 13.5px; font-weight: 600; }
 .recipe-grid select { height: 38px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 10px; background: #fff; font-size: 13px; }
 .recipe-card > footer, .order-form > footer { display: flex; justify-content: flex-end; gap: 10px; }
+.recipe-card > footer .ghost-danger { margin-right: auto; }
+.ghost-danger {
+  height: 40px; padding: 0 12px; border: 0; border-radius: 11px; display: inline-flex; align-items: center; gap: 6px;
+  color: var(--danger); background: transparent; font-size: 13px; font-weight: 600;
+}
+.ghost-danger:hover { background: var(--danger-soft); }
+.danger-button {
+  height: 40px; padding: 0 18px; border: 0; border-radius: 11px; color: #fff; background: var(--danger);
+  box-shadow: 0 3px 0 #8e2019; font-size: 13px; font-weight: 700;
+}
+.danger-button:disabled { opacity: .6; }
+.bin-confirm { padding: 14px; border: 1px solid #f3c2bc; border-radius: 14px; display: grid; gap: 8px; background: #fff6f4; animation: rise .15s ease; }
+.bin-confirm strong { display: flex; align-items: center; gap: 7px; color: var(--danger); font-size: 14.5px; }
+.bin-confirm > span { color: var(--ink-soft); font-size: 12.5px; }
+.bin-confirm input { height: 40px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 10px; background: #fff; font-size: 13.5px; }
+.bin-confirm > div { display: flex; justify-content: flex-end; gap: 8px; }
+.id-change-note { margin: 0; padding: 9px 12px; border-radius: 10px; display: flex; align-items: flex-start; gap: 7px; color: #7a5600; background: var(--butter); font-size: 12.5px; line-height: 1.5; }
+.id-change-note svg { flex: 0 0 auto; margin-top: 2px; }
+.restore-button {
+  height: 30px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 99px; display: inline-flex; align-items: center; gap: 5px;
+  color: var(--basil); background: #fff; font-size: 12px; font-weight: 700; white-space: nowrap;
+}
+.restore-button:hover { color: #fff; border-color: var(--basil); background: var(--basil); }
+.bin td:first-child > span:last-child { color: var(--ink-soft); text-decoration: line-through; text-decoration-color: rgb(155 136 120 / 60%); }
 
 .order-form__icon { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; color: #fff; background: var(--menu); box-shadow: 0 3px 0 rgb(0 0 0 / 20%); }
 .order-form > header strong { display: block; font-family: var(--font-display); font-size: 20px; font-weight: 500; }
@@ -475,6 +499,8 @@ h1, h2, h3, strong { font-weight: 600; }
   font-size: 13.5px; transform: translateX(-50%); animation: toast .2s ease;
 }
 .toast.is-error { background: var(--danger); color: #fff; }
+.toast { display: flex; align-items: center; gap: 14px; }
+.toast button { height: 28px; padding: 0 12px; border: 0; border-radius: 8px; color: var(--ink); background: #f3c96c; font-size: 12.5px; font-weight: 700; }
 @keyframes toast { from { opacity: 0; transform: translate(-50%, 8px); } }
 
 /* ---------- Crew page ---------- */

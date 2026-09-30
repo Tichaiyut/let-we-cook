@@ -70,7 +70,8 @@ function load() {
 }
 
 export function createSampleKitchen(ApiError) {
-  let db = load();
+  const db = load();
+  db.usedIds = db.usedIds || db.tasks.map((task) => task.id);
   const persist = () => {
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
@@ -82,16 +83,33 @@ export function createSampleKitchen(ApiError) {
   const decorate = (task) => {
     const epic = db.epics.find((item) => item.code === task.epicCode) || {};
     const story = db.stories.find((item) => item.id === task.storyId) || {};
-    return { ...task, epic: epic.name || task.epicCode, epicColor: epic.color || "", story: story.name || "" };
+    return { ...task, deleted: Boolean(task.deleted), epic: epic.name || task.epicCode, epicColor: epic.color || "", story: story.name || "" };
   };
   const snapshot = () => ({
     ok: true,
     people: db.people,
     epics: db.epics,
     stories: db.stories,
-    tasks: db.tasks.map(decorate),
+    tasks: db.tasks.filter((task) => !task.deleted).map(decorate),
+    trash: db.tasks.filter((task) => task.deleted).map(decorate),
     generatedAt: new Date().toISOString(),
   });
+  const find = (id) => {
+    const task = db.tasks.find((item) => item.id === id);
+    if (!task) throw new ApiError("Work item not found");
+    return task;
+  };
+  // Like the Apps Script, an ID that was ever issued is never issued again.
+  const nextId = (storyId, issueType) => {
+    const typeCode = issueType === "Bug" ? "B" : "T";
+    const prefix = `${storyId}-${typeCode}`;
+    const next = db.usedIds.reduce((max, id) => {
+      const match = id.match(new RegExp(`^${prefix}(\d{4})$`));
+      return match ? Math.max(max, Number(match[1])) : max;
+    }, 0) + 1;
+    const itemCode = `${typeCode}${String(next).padStart(4, "0")}`;
+    return { id: `${storyId}-${itemCode}`, itemCode };
+  };
 
   return {
     async login() {
@@ -121,15 +139,9 @@ export function createSampleKitchen(ApiError) {
         if (db.stories.some((story) => story.id === storyId)) throw new ApiError("Course code already exists in this menu");
         db.stories.push({ id: storyId, epicCode, code: payload.newStory.code, name: payload.newStory.name, status: "Active" });
       }
-      const typeCode = payload.issueType === "Bug" ? "B" : "T";
-      const prefix = `${storyId}-${typeCode}`;
-      const next = db.tasks.reduce((max, task) => {
-        const match = task.id.match(new RegExp(`^${prefix}(\\d{4})$`));
-        return match ? Math.max(max, Number(match[1])) : max;
-      }, 0) + 1;
-      const itemCode = `${typeCode}${String(next).padStart(4, "0")}`;
+      const { id, itemCode } = nextId(storyId, payload.issueType);
       const task = {
-        id: `${prefix}${String(next).padStart(4, "0")}`,
+        id,
         itemCode,
         epicCode,
         storyId,
@@ -143,14 +155,57 @@ export function createSampleKitchen(ApiError) {
         dueDate: payload.dueDate,
       };
       db.tasks.push(task);
+      db.usedIds.push(id);
       persist();
       const data = snapshot();
       return wait({ ok: true, task: decorate(task), epics: data.epics, stories: data.stories });
     },
     async updateStatus(id, status) {
-      const task = db.tasks.find((item) => item.id === id);
-      if (!task) throw new ApiError("Work item not found");
+      const task = find(id);
+      if (task.deleted) throw new ApiError("งานนี้อยู่ในถังขยะ กู้คืนก่อนเปลี่ยนสถานะ");
       task.status = status;
+      persist();
+      return wait({ ok: true, task: decorate(task) });
+    },
+    async updateTask(payload) {
+      const task = find(payload.id);
+      if (task.deleted) throw new ApiError("งานนี้อยู่ในถังขยะ กู้คืนก่อนแก้ไข");
+      const story = db.stories.find((item) => item.id === payload.storyId);
+      if (!story) throw new ApiError("Choose a valid course");
+      const previousId = task.id;
+      const prefix = `${story.id}-${payload.issueType === "Bug" ? "B" : "T"}`;
+      if (!new RegExp(`^${prefix}\d{4}$`).test(task.id)) {
+        const { id, itemCode } = nextId(story.id, payload.issueType);
+        Object.assign(task, { id, itemCode });
+        db.usedIds.push(id);
+        Object.values(db.plans).forEach((entries) => entries.forEach((entry) => {
+          if (entry.taskId === previousId) entry.taskId = id;
+        }));
+      }
+      Object.assign(task, {
+        epicCode: story.epicCode,
+        storyId: story.id,
+        issueType: payload.issueType,
+        title: payload.title,
+        description: payload.description,
+        dueDate: payload.dueDate,
+        assignees: payload.assignees,
+        status: payload.status,
+      });
+      persist();
+      return wait({ ok: true, task: decorate(task), previousId: task.id === previousId ? "" : previousId });
+    },
+    async deleteTask(id, _reason, actor) {
+      const task = find(id);
+      if (task.deleted) throw new ApiError("งานนี้อยู่ในถังขยะแล้ว");
+      Object.assign(task, { deleted: true, deletedAt: new Date().toISOString(), deletedBy: actor });
+      persist();
+      return wait({ ok: true, task: decorate(task) });
+    },
+    async restoreTask(id) {
+      const task = find(id);
+      if (!task.deleted) throw new ApiError("งานนี้ไม่ได้อยู่ในถังขยะ");
+      Object.assign(task, { deleted: false, deletedAt: "", deletedBy: "" });
       persist();
       return wait({ ok: true, task: decorate(task) });
     },

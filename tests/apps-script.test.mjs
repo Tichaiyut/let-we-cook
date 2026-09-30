@@ -27,10 +27,15 @@ class FakeSheet {
   getLastColumn() {
     return this.data[0].length;
   }
+  getMaxColumns() {
+    return 26;
+  }
+  insertColumnsAfter() {}
   getRange(row, column, rows = 1, columns = 1) {
     return {
       getValues: () => this.data.slice(row - 1, row - 1 + rows).map((values) => values.slice(column - 1, column - 1 + columns)),
       setValue: (value) => { this.data[row - 1][column - 1] = value; },
+      setValues: (values) => values.forEach((cells, r) => cells.forEach((value, c) => { this.data[row - 1 + r][column - 1 + c] = value; })),
     };
   }
   // Like Google Sheets, ISO date strings become real dates (Bangkok midnight).
@@ -272,4 +277,112 @@ test("saves and reloads today's menu per chef and date", () => {
   save([{ taskId: "Y", note: "tomorrow" }], "sorawee", "2026-10-01");
   assert.deepEqual(load(), [{ taskId: "IFM-PER-T0002", note: "replaced" }]);
   assert.match(save([], "stranger").error, /Unknown chef/);
+});
+
+function seedTicket(call, token, overrides = {}) {
+  return call({ action: "createTask", token, actor: "sorawee", payload: newOrder(overrides) }).task;
+}
+
+test("setup adds the trash columns to older sheets", () => {
+  const { sheets } = createKitchen();
+  const headers = sheets["Work Items"].data[0];
+  assert.deepEqual(headers.slice(-3), ["Deleted", "DeletedAt", "DeletedBy"]);
+});
+
+test("deleting moves a ticket to the trash and restoring brings it back", () => {
+  const { call, login, sheets } = createKitchen();
+  const { token } = login();
+  const ticket = seedTicket(call, token);
+  const deleted = call({ action: "deleteTask", token, actor: "arparat", payload: { id: ticket.id, reason: "duplicate" } });
+  assert.equal(deleted.ok, true, deleted.error);
+  assert.equal(deleted.task.deleted, true);
+  assert.equal(deleted.task.deletedBy, "arparat");
+
+  let data = call({ action: "bootstrap", token });
+  assert.equal(data.tasks.length, 0);
+  assert.deepEqual(data.trash.map((task) => task.id), [ticket.id]);
+  assert.equal(sheets["Work Items"].data.length, 2, "the row stays in the sheet");
+  const log = sheets["Activity Log"].data.at(-1);
+  assert.deepEqual([log[4], log[7]], ["Deleted", "duplicate"]);
+
+  assert.match(call({ action: "deleteTask", token, payload: { id: ticket.id } }).error, /ถังขยะแล้ว/);
+  assert.match(call({ action: "updateStatus", token, payload: { id: ticket.id, status: "Done" } }).error, /ถังขยะ/);
+
+  const restored = call({ action: "restoreTask", token, actor: "arparat", payload: { id: ticket.id } });
+  assert.equal(restored.task.deleted, false);
+  assert.deepEqual(restored.task.assignees, ["tichaiyut", "sorawee"], "assignees survive the trip");
+  data = call({ action: "bootstrap", token });
+  assert.deepEqual([data.tasks.length, data.trash.length], [1, 0]);
+});
+
+test("deleted IDs are never handed out again", () => {
+  const { call, login, sheets } = createKitchen();
+  const { token } = login();
+  seedTicket(call, token);
+  const second = seedTicket(call, token, { newEpic: null, newStory: null, epicCode: "IFM", storyId: "IFM-PER" });
+  call({ action: "deleteTask", token, payload: { id: second.id } });
+  // even if the owner removes the row by hand, the Activity Log remembers the ID
+  sheets["Work Items"].data.splice(2, 1);
+  const third = seedTicket(call, token, { newEpic: null, newStory: null, epicCode: "IFM", storyId: "IFM-PER" });
+  assert.equal(third.id, "IFM-PER-T0003");
+});
+
+test("edits every field of a ticket and keeps its ID within the same course", () => {
+  const { call, login, sheets } = createKitchen();
+  const { token } = login();
+  const ticket = seedTicket(call, token);
+  const result = call({
+    action: "updateTask", token, actor: "tichaiyut",
+    payload: { id: ticket.id, storyId: "IFM-PER", issueType: "Task", title: "Renamed", description: "More detail", dueDate: "2027-01-31", assignees: ["chonlasit"], status: "In Progress" },
+  });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.previousId, "");
+  assert.equal(result.task.id, ticket.id);
+  assert.equal(result.task.title, "Renamed");
+  assert.equal(result.task.description, "More detail");
+  assert.equal(result.task.dueDate.slice(0, 10), "2027-01-31");
+  assert.equal(result.task.status, "In Progress");
+  assert.deepEqual(result.task.assignees, ["chonlasit"]);
+  assert.equal(sheets["Task Assignees"].data.length, 2);
+  assert.match(sheets["Activity Log"].data.at(-1)[7], /title, description, due date, status, chefs/);
+});
+
+test("moving to another course or type gives a new ID and carries references along", () => {
+  const { call, login, sheets } = createKitchen();
+  const { token } = login();
+  const ticket = seedTicket(call, token);
+  call({ action: "createTask", token, payload: newOrder({ newEpic: null, epicCode: "IFM", newStory: { code: "DEN", name: "Daily Entry" }, title: "Other" }) });
+  call({ action: "saveDailyPlan", token, payload: { planDate: "2026-09-30", personId: "sorawee", entries: [{ taskId: ticket.id, note: "keep me" }] } });
+
+  const moved = call({
+    action: "updateTask", token,
+    payload: { id: ticket.id, storyId: "IFM-DEN", issueType: "Bug", title: ticket.title, description: "", dueDate: inTenDays(), assignees: ["sorawee"], status: "To Do" },
+  });
+  assert.equal(moved.ok, true, moved.error);
+  assert.equal(moved.previousId, "IFM-PER-T0001");
+  assert.equal(moved.task.id, "IFM-DEN-B0001");
+  assert.equal(moved.task.story, "Daily Entry");
+  assert.deepEqual(moved.task.assignees, ["sorawee"]);
+  assert.ok(sheets["Task Assignees"].data.every((row, index) => index === 0 || row[0] !== "IFM-PER-T0001"));
+  const plan = call({ action: "getDailyPlan", token, payload: { planDate: "2026-09-30", personId: "sorawee" } });
+  assert.deepEqual(plan.entries, [{ taskId: "IFM-DEN-B0001", note: "keep me" }]);
+
+  const next = seedTicket(call, token, { newEpic: null, newStory: null, epicCode: "IFM", storyId: "IFM-PER" });
+  assert.equal(next.id, "IFM-PER-T0002", "the moved-away ID is not reused");
+});
+
+test("rejects invalid edits", () => {
+  const { call, login } = createKitchen();
+  const { token } = login();
+  const ticket = seedTicket(call, token);
+  const edit = (changes) => call({
+    action: "updateTask", token,
+    payload: { id: ticket.id, storyId: "IFM-PER", issueType: "Task", title: "ok", dueDate: inTenDays(), assignees: ["sorawee"], status: "To Do", ...changes },
+  }).error;
+  assert.match(edit({ title: "" }), /Title/);
+  assert.match(edit({ storyId: "NOPE" }), /valid course/);
+  assert.match(edit({ assignees: [] }), /chef/);
+  assert.match(edit({ id: "IFM-PER-T9999" }), /not found/);
+  call({ action: "deleteTask", token, payload: { id: ticket.id } });
+  assert.match(edit({}), /ถังขยะ/);
 });

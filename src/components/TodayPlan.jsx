@@ -60,7 +60,7 @@ export function TodayPlan({
           <div className="plan-empty">กำลังหยิบเมนูของวันนี้…</div>
         ) : entries.length === 0 ? (
           <div className="plan-empty">{canPlan ? "ยังไม่มีเมนูของวันนี้" : "เลือกเชฟก่อน แล้วค่อยวางแผน"}</div>
-        ) : entries.map(({ taskId, task, note }) => (
+        ) : entries.map(({ taskId, task, note, binned }) => (
           <article className="plan-note" key={taskId} style={{ "--menu": task?.color || "#8a7a6a" }}>
             <div className="plan-note__top">
               <b>{taskId}</b>
@@ -68,7 +68,7 @@ export function TodayPlan({
               {task && <span className={`mini-priority ${task.priority.toLowerCase()}`}>{task.priority}</span>}
               <button type="button" onClick={() => onRemove(taskId)} aria-label={`Remove ${taskId}`}><X size={11} weight="bold" /></button>
             </div>
-            <strong>{task ? task.title : "งานนี้ไม่อยู่บนบอร์ดแล้ว"}</strong>
+            <strong>{task ? task.title : binned ? "🗑 งานนี้ถูกทิ้งลงถังขยะแล้ว" : "งานนี้ไม่อยู่บนบอร์ดแล้ว"}</strong>
             <textarea
               rows={1}
               value={note}

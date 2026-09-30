@@ -96,6 +96,9 @@ const liveKitchen = {
   saveDailyPlan: (planDate, personId, entries, actor) => call("saveDailyPlan", { actor, payload: { planDate, personId, entries } }),
   createTask: (payload, actor) => call("createTask", { actor, payload }),
   updateStatus: (id, status, actor) => call("updateStatus", { actor, payload: { id, status } }),
+  updateTask: (payload, actor) => call("updateTask", { actor, payload }),
+  deleteTask: (id, reason, actor) => call("deleteTask", { actor, payload: { id, reason } }),
+  restoreTask: (id, actor) => call("restoreTask", { actor, payload: { id } }),
 };
 
 export const api = {
