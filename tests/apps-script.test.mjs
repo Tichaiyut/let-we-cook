@@ -1,0 +1,275 @@
+// Runs apps-script/Code.gs in a Node sandbox with small fakes of the Google
+// services it uses, so the API contract, auth and lockout rules are tested
+// without deploying.
+import assert from "node:assert/strict";
+import { createHmac, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import vm from "node:vm";
+
+const CODE = readFileSync(new URL("../apps-script/Code.gs", import.meta.url), "utf8");
+const PASSWORD = "kitchen-open-2026";
+
+// Dates written into fake sheets must come from the sandbox realm, otherwise
+// `instanceof Date` inside Code.gs would not recognise them.
+let SheetDate = Date;
+
+const toBuffer = (value) => (typeof value === "string" ? Buffer.from(value, "utf8") : Buffer.from(value.map((byte) => byte & 0xff)));
+const toBytes = (buffer) => [...buffer].map((byte) => (byte > 127 ? byte - 256 : byte));
+
+class FakeSheet {
+  constructor(headers, rows = []) {
+    this.data = [headers, ...rows];
+  }
+  getDataRange() {
+    return { getValues: () => this.data.map((row) => [...row]) };
+  }
+  getLastColumn() {
+    return this.data[0].length;
+  }
+  getRange(row, column, rows = 1, columns = 1) {
+    return {
+      getValues: () => this.data.slice(row - 1, row - 1 + rows).map((values) => values.slice(column - 1, column - 1 + columns)),
+      setValue: (value) => { this.data[row - 1][column - 1] = value; },
+    };
+  }
+  // Like Google Sheets, ISO date strings become real dates (Bangkok midnight).
+  appendRow(values) {
+    this.data.push(values.map((value) => (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? new SheetDate(`${value}T00:00:00+07:00`) : value)));
+  }
+  deleteRow(row) {
+    this.data.splice(row - 1, 1);
+  }
+}
+
+function bangkok(date) {
+  const shifted = new Date(date.getTime() + 7 * 3600000).toISOString();
+  return { day: shifted.slice(0, 10), time: shifted.slice(11, 19) };
+}
+
+function createKitchen() {
+  const sheets = {
+    People: new FakeSheet(["PersonID", "DisplayName", "Active", "CharacterName", "Role", "AvatarFile", "CreatedAt", "UpdatedAt"], [
+      ["arparat", "Arparat", true, "Saint - Chan", "Data Provider", "", "", ""],
+      ["tichaiyut", "Tichaiyut", true, "Topu - Kun", "Data Scientist", "", "", ""],
+      ["chonlasit", "Chonlasit", true, "Bon - Kun", "AI Engineer", "", "", ""],
+      ["sorawee", "Sorawee", true, "Ing - Kun", "Web Developer", "", "", ""],
+      ["bank", "Bank", false, "", "", "", "", ""],
+    ]),
+    Epics: new FakeSheet(["EpicCode", "EpicName", "ProjectColor", "Status", "CreatedAt", "CreatedBy", "UpdatedAt", "UpdatedBy"]),
+    Stories: new FakeSheet(["StoryID", "EpicCode", "StoryCode", "StoryName", "Status", "CreatedAt", "CreatedBy", "UpdatedAt", "UpdatedBy"]),
+    "Work Items": new FakeSheet(["WorkItemID", "EpicCode", "StoryID", "ItemCode", "IssueType", "Title", "Description", "Status", "Priority", "CreatedDate", "DueDate", "Reporter", "AssigneeSummary", "Progress", "Blocker", "Tags", "UpdatedAt", "UpdatedBy"]),
+    "Task Assignees": new FakeSheet(["WorkItemID", "PersonID", "AssigneeOrder", "AddedAt", "AddedBy"]),
+    "Daily Plans": new FakeSheet(["PlanID", "PlanDate", "PersonID", "WorkItemID", "Note", "SavedAt", "SavedBy"]),
+    "Activity Log": new FakeSheet(["EventID", "Timestamp", "Actor", "WorkItemID", "Action", "FromValue", "ToValue", "Detail"]),
+  };
+  const spreadsheet = { getId: () => "sheet-id", getSheetByName: (name) => sheets[name] || null };
+  const properties = new Map();
+  const cache = new Map();
+  const context = vm.createContext({
+    Logger: { log() {} },
+    SpreadsheetApp: {
+      getActiveSpreadsheet: () => spreadsheet,
+      openById: () => spreadsheet,
+      getUi: () => { throw new Error("No UI in web app context"); },
+    },
+    PropertiesService: {
+      getScriptProperties: () => ({
+        getProperty: (key) => (properties.has(key) ? properties.get(key) : null),
+        setProperty: (key, value) => properties.set(key, String(value)),
+        setProperties: (values) => Object.entries(values).forEach(([key, value]) => properties.set(key, String(value))),
+        deleteProperty: (key) => properties.delete(key),
+      }),
+    },
+    CacheService: {
+      getScriptCache: () => ({
+        get: (key) => (cache.has(key) ? cache.get(key) : null),
+        put: (key, value) => cache.set(key, String(value)),
+        remove: (key) => cache.delete(key),
+      }),
+    },
+    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    ContentService: {
+      MimeType: { JSON: "application/json" },
+      createTextOutput: (text) => ({ text, setMimeType() { return this; } }),
+    },
+    Utilities: {
+      getUuid: () => randomUUID(),
+      newBlob: (text) => ({ getBytes: () => toBytes(Buffer.from(text, "utf8")) }),
+      computeHmacSha256Signature: (value, key) => toBytes(createHmac("sha256", toBuffer(key)).update(toBuffer(value)).digest()),
+      base64EncodeWebSafe: (bytes) => toBuffer(bytes).toString("base64").replace(/\+/g, "-").replace(/\//g, "_"),
+      formatDate: (date, _zone, pattern) => {
+        const { day, time } = bangkok(date);
+        return pattern === "yyyy-MM-dd" ? day : `${day}T${time}+07:00`;
+      },
+    },
+  });
+  SheetDate = vm.runInContext("Date", context);
+  vm.runInContext(CODE, context);
+  context.setupLetWeCook();
+  context.storePassword_(PASSWORD);
+
+  const call = (body) => JSON.parse(context.doPost({ postData: { contents: JSON.stringify(body) } }).text);
+  const login = (password = PASSWORD, clientId = "browser-a") => call({ action: "login", password, clientId });
+  return { context, sheets, properties, cache, call, login };
+}
+
+const inTenDays = () => new Date(Date.now() + 10 * 86400000).toISOString().slice(0, 10);
+
+function newOrder(overrides = {}) {
+  return {
+    epicCode: "",
+    newEpic: { code: "IFM", name: "iFarm", color: "#2f72e8" },
+    storyId: "",
+    newStory: { code: "PER", name: "Performance Dashboard" },
+    title: "Weekly performance chart",
+    description: "",
+    issueType: "Task",
+    assignees: ["tichaiyut", "sorawee"],
+    status: "To Do",
+    dueDate: inTenDays(),
+    ...overrides,
+  };
+}
+
+test("health check exposes no data", () => {
+  const { context } = createKitchen();
+  const health = JSON.parse(context.doGet().text);
+  assert.equal(health.ok, true);
+  assert.equal(health.tasks, undefined);
+});
+
+test("every data action needs a valid session token", () => {
+  const { call, login, properties } = createKitchen();
+  assert.equal(call({ action: "bootstrap" }).code, "AUTH");
+  assert.equal(call({ action: "bootstrap", token: "123.abc.def" }).code, "AUTH");
+
+  const session = login();
+  assert.equal(session.ok, true);
+  assert.ok(session.expiresAt > Date.now() + 7000 * 1000, "session lasts about 2 hours");
+  const data = call({ action: "bootstrap", token: session.token });
+  assert.equal(data.ok, true);
+  assert.equal(data.people.length, 5);
+
+  const [expires, nonce] = session.token.split(".");
+  assert.equal(call({ action: "bootstrap", token: `${expires}.${nonce}.forged` }).code, "AUTH");
+  assert.equal(call({ action: "bootstrap", token: `${Number(expires) + 999}.${nonce}.${session.token.split(".")[2]}` }).code, "AUTH");
+
+  const expiredPayload = `1000.${nonce}`;
+  const signature = createHmac("sha256", properties.get("TOKEN_SECRET")).update(expiredPayload).digest("base64url");
+  assert.equal(call({ action: "bootstrap", token: `${expiredPayload}.${signature}` }).code, "AUTH");
+});
+
+test("changing the team password signs everyone out", () => {
+  const { call, login, context } = createKitchen();
+  const { token } = login();
+  context.storePassword_("a-brand-new-password");
+  assert.equal(call({ action: "bootstrap", token }).code, "AUTH");
+  assert.equal(login().code, "WRONG_PASSWORD");
+  assert.equal(login("a-brand-new-password").ok, true);
+});
+
+test("five wrong passwords lock that browser for two hours", () => {
+  const { login } = createKitchen();
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    const result = login("wrong", "browser-a");
+    assert.equal(result.code, "WRONG_PASSWORD");
+    assert.equal(result.remaining, 5 - attempt);
+  }
+  const fifth = login("wrong", "browser-a");
+  assert.equal(fifth.code, "LOCKED");
+  assert.equal(fifth.retryAfter, 7200);
+  assert.equal(login(PASSWORD, "browser-a").code, "LOCKED", "even the right password waits out the lock");
+  assert.equal(login(PASSWORD, "browser-b").ok, true, "other browsers are unaffected");
+});
+
+test("a successful login clears earlier failures", () => {
+  const { login } = createKitchen();
+  login("wrong");
+  login("wrong");
+  assert.equal(login().ok, true);
+  assert.equal(login("wrong").remaining, 4);
+});
+
+test("twenty wrong passwords across browsers pause every login", () => {
+  const { login } = createKitchen();
+  for (let attempt = 0; attempt < 20; attempt += 1) login("wrong", `attacker-${attempt}`);
+  const paused = login(PASSWORD, "teammate");
+  assert.equal(paused.code, "PAUSED");
+  assert.equal(paused.retryAfter, 900);
+});
+
+test("creates menus, courses and numbered tickets", () => {
+  const { call, login, sheets } = createKitchen();
+  const { token } = login();
+  const first = call({ action: "createTask", token, actor: "tichaiyut", payload: newOrder() });
+  assert.equal(first.ok, true, first.error);
+  assert.equal(first.task.id, "IFM-PER-T0001");
+  assert.deepEqual(first.task.assignees, ["tichaiyut", "sorawee"]);
+  assert.equal(first.task.epic, "iFarm");
+  assert.equal(first.task.story, "Performance Dashboard");
+  assert.equal(first.task.priority, "High");
+  assert.equal(first.task.dueDate.slice(0, 10), inTenDays());
+  assert.equal(first.epics.length, 1);
+  assert.equal(first.stories.length, 1);
+
+  const existing = { newEpic: null, newStory: null, epicCode: "IFM", storyId: "IFM-PER" };
+  assert.equal(call({ action: "createTask", token, payload: newOrder({ ...existing, title: "Second" }) }).task.id, "IFM-PER-T0002");
+  assert.equal(call({ action: "createTask", token, payload: newOrder({ ...existing, issueType: "Bug", title: "Broken chart" }) }).task.id, "IFM-PER-B0001");
+  assert.equal(sheets["Task Assignees"].data.length, 1 + 2 + 2 + 2);
+  assert.ok(sheets["Activity Log"].data.length > 3);
+});
+
+test("rejects invalid tickets", () => {
+  const { call, login } = createKitchen();
+  const { token } = login();
+  const error = (payload) => call({ action: "createTask", token, payload }).error;
+  assert.match(error(newOrder({ assignees: ["bank"] })), /at least one chef/);
+  assert.match(error(newOrder({ title: "  " })), /Title/);
+  assert.match(error(newOrder({ dueDate: "" })), /Due date/);
+  assert.match(error(newOrder({ newEpic: null, epicCode: "XYZ" })), /valid menu/);
+  assert.match(error(newOrder({ newEpic: { code: "AB", name: "Too short" } })), /3 letters/);
+  call({ action: "createTask", token, payload: newOrder() });
+  assert.match(error(newOrder()), /already exists/);
+  assert.match(error(newOrder({ newEpic: null, epicCode: "IFM", newStory: null, storyId: "IFM-NOP" })), /valid course/);
+});
+
+test("text that looks like a formula is stored as plain text", () => {
+  const { call, login, sheets } = createKitchen();
+  const { token } = login();
+  call({ action: "createTask", token, payload: newOrder({ title: '=HYPERLINK("http://evil","x")' }) });
+  const title = sheets["Work Items"].data[1][5];
+  assert.equal(title, `'=HYPERLINK("http://evil","x")`);
+});
+
+test("updates the station of a ticket", () => {
+  const { call, login, sheets } = createKitchen();
+  const { token } = login();
+  call({ action: "createTask", token, payload: newOrder() });
+  const result = call({ action: "updateStatus", token, actor: "sorawee", payload: { id: "IFM-PER-T0001", status: "Done" } });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.task.status, "Done");
+  assert.equal(result.task.priority, "Done");
+  assert.equal(sheets["Work Items"].data[1][13], 100);
+  assert.match(call({ action: "updateStatus", token, payload: { id: "IFM-PER-T0001", status: "Review" } }).error, /Invalid status/);
+  assert.match(call({ action: "updateStatus", token, payload: { id: "NOPE", status: "Done" } }).error, /not found/);
+});
+
+test("saves and reloads today's menu per chef and date", () => {
+  const { call, login } = createKitchen();
+  const { token } = login();
+  const save = (entries, personId = "sorawee", planDate = "2026-09-30") =>
+    call({ action: "saveDailyPlan", token, actor: personId, payload: { planDate, personId, entries } });
+  const load = (personId = "sorawee", planDate = "2026-09-30") =>
+    call({ action: "getDailyPlan", token, payload: { planDate, personId } }).entries;
+
+  assert.deepEqual(load(), []);
+  assert.equal(save([{ taskId: "IFM-PER-T0001", note: "finish chart" }, { taskId: "IFM-PER-B0001", note: "" }]).saved, 2);
+  assert.deepEqual(load(), [{ taskId: "IFM-PER-T0001", note: "finish chart" }, { taskId: "IFM-PER-B0001", note: "" }]);
+  save([{ taskId: "IFM-PER-T0002", note: "replaced" }]);
+  assert.deepEqual(load(), [{ taskId: "IFM-PER-T0002", note: "replaced" }]);
+  save([{ taskId: "X", note: "other chef" }], "chonlasit");
+  save([{ taskId: "Y", note: "tomorrow" }], "sorawee", "2026-10-01");
+  assert.deepEqual(load(), [{ taskId: "IFM-PER-T0002", note: "replaced" }]);
+  assert.match(save([], "stranger").error, /Unknown chef/);
+});

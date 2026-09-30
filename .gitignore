@@ -1,8 +1,6 @@
 node_modules/
-.npm-cache/
 dist/
 .env*
-.dev.vars*
-php-release/
-implementation-*.png
-design-comparison-*.png
+!.env.example
+*.log
+.claude/

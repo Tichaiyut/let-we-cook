@@ -1,20 +1,16 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+// base "./" keeps every asset path relative, so the same build works on
+// GitHub Pages (/let-we-cook/) and on any other static host.
 export default defineConfig({
   base: "./",
   build: {
-    outDir: "dist/client",
-  },
-  optimizeDeps: {
-    include: ["react", "react-dom/client"],
+    outDir: "dist",
   },
   server: {
-    host: "0.0.0.0",
-    allowedHosts: ["terminal.local"],
-    warmup: {
-      clientFiles: ["./src/main.jsx"],
-    },
+    host: "127.0.0.1",
+    port: 5173,
   },
   plugins: [react()],
 });

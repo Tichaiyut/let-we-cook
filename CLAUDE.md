@@ -1,0 +1,30 @@
+# Let We Cook — notes for AI assistants
+
+Team task tracker for the 4-person TechFeed team. React 19 + Vite static site on GitHub Pages; data in a Google Sheet behind a Google Apps Script web app (`apps-script/Code.gs`). The owner communicates in Thai; UI copy is English kitchen vocabulary with Thai microcopy.
+
+## Product decisions (confirmed with the owner)
+
+- **Kitchen theme only.** There is no "normal" mode. UI terms: Menu (Epic) → Course (Story) → Food Piece (Task) / Kitchen Issue (Bug). Stations: Ready to Prep (To Do), Cooking (In Progress), Served (Done); Pantry = Backlog; Heat = Priority. Keep the underlying data model in Epic/Story/Task/Bug terms.
+- Exactly three board stations. Backlog lives in the Pantry tab. Legacy "Review" maps to In Progress.
+- Every work item belongs to a Menu and a Course. IDs are `MENU-COURSE-T0001` / `B0001` (3-letter codes). New Menus/Courses are created inside the create form; nothing is pre-seeded.
+- Priority is always computed from the due date (≤7 days or overdue Urgent, ≤14 High, ≤30 Medium, else Low; Done → Done). Never trust a stored priority.
+- Today's menu (Daily Plan) copies tickets; it never moves them. Planning requires choosing a chef; the chef filter and the plan's chef stay in sync. Plans load back from the sheet per chef + date.
+- Each station shows exactly five complete 124px tickets (+ 7px gaps = 648px body); the rest scroll inside the station. Sort oldest due date first, undated last.
+- Crew: Arparat = Saint - Chan (Data Provider), Tichaiyut = Topu - Kun (Data Scientist), Chonlasit = Bon - Kun (AI Engineer), Sorawee = Ing - Kun (Web Developer). **Never use real face photos** — the repo is public. Character art is configured in `src/team.js`.
+- Former members and "Dev Team" are not shown. Only `Active = TRUE` people from the People sheet appear.
+- Old data from the original "Tech Feed Development" sheet was intentionally **not** migrated; the new sheet started empty.
+
+## Auth model (in Code.gs)
+
+- Shared team password, salted + iterated HMAC-SHA256 in Script Properties; set via the sheet menu `🍳 Let We Cook`. Changing it rotates `TOKEN_SECRET` (signs everyone out).
+- Stateless HMAC token, 2-hour expiry, sent in the POST body. All requests are `text/plain` POSTs so Apps Script CORS works without preflight.
+- Apps Script cannot see client IPs: 5 wrong passwords lock a browser (`clientId` in localStorage) for 2h; 20 wrong passwords site-wide within 10 min pause all logins for 15 min (CacheService).
+- `safeCell_` prefixes `'` to text starting with `= + - @` to stop formula injection.
+
+## Working on it
+
+- `npm run dev` uses in-browser sample data (`src/sampleKitchen.js`) and skips login. `VITE_USE_LIVE_API=true` (+ optional `VITE_API_URL`) talks to a real API.
+- `npm test` runs `tests/*.test.mjs`, including `tests/apps-script.test.mjs`, which executes the real `Code.gs` in a Node `vm` with fake Google services. Update those fakes when Code.gs starts using a new service.
+- Keep `api.js` (live) and `sampleKitchen.js` (dev) response shapes identical.
+- `.github/workflows/deploy.yml` tests, builds and deploys `dist/` to GitHub Pages on every push to `main`. `vite.config.mjs` uses `base: "./"` so the same build also works on any static host.
+- After editing `Code.gs`, the owner must paste it into the Apps Script editor and publish a new version of the existing deployment (same `/exec` URL).
