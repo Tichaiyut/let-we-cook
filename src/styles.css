@@ -524,7 +524,7 @@ h1, h2, h3, strong { font-weight: 600; }
 
 /* ---------- Login ---------- */
 
-.door-screen { position: relative; min-height: 100vh; padding: 120px 20px 40px; display: grid; place-items: start center; }
+.door-screen { position: relative; min-height: 100vh; padding: 120px 20px 40px; display: grid; grid-template-columns: minmax(0, 1fr); place-items: start center; overflow-x: hidden; }
 .door-awning {
   position: absolute; top: 0; left: 0; right: 0; height: 64px;
   background: repeating-linear-gradient(90deg, var(--tomato) 0 40px, #fff6ea 40px 80px);
@@ -538,7 +538,7 @@ h1, h2, h3, strong { font-weight: 600; }
   filter: drop-shadow(0 4px 3px rgb(0 0 0 / 15%));
 }
 .door-card {
-  width: min(430px, 100%); padding: 34px 32px 28px; border: 1px solid var(--line); border-radius: 26px; text-align: center;
+  width: 100%; max-width: 430px; padding: 34px 32px 28px; border: 1px solid var(--line); border-radius: 26px; text-align: center;
   background: var(--paper); box-shadow: 0 8px 0 var(--wood), var(--shadow-lg); animation: rise .25s ease;
 }
 .door-emblem {
